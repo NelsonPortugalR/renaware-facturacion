@@ -1,0 +1,1166 @@
+<!doctype html>
+<html lang="es-PE">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Facturación · Equipo Arequipa</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%23101C2E'/><text x='16' y='23' font-family='monospace' font-size='17' fill='%23EDEFEA' text-anchor='middle'>F</text></svg>">
+<style>
+:root{
+  --ink:#101C2E; --ink70:#3A4658; --ink40:#7C8794;
+  --paper:#EDEFEA; --card:#FFF; --rule:#D4D8D0;
+  --verde:#0F6E4F; --ambar:#A96A08; --detra:#3E5C8A; --alerta:#9B2C2C;
+  --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--paper);color:var(--ink);
+  font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;-webkit-text-size-adjust:100%}
+button{font-family:inherit;cursor:pointer}
+input,select,textarea{font-family:inherit}
+.mono{font-family:var(--mono)}
+.caps{text-transform:uppercase;letter-spacing:.13em;font-family:var(--mono)}
+.wrap{max-width:1100px;margin:0 auto;padding:0 16px}
+.card{background:var(--card);border:1px solid var(--rule)}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.grid{display:grid;gap:12px}
+.btn{border:1px solid var(--ink);background:var(--ink);color:#fff;
+  padding:8px 16px;font:11px/1 var(--mono);text-transform:uppercase;letter-spacing:.1em}
+.btn.sec{background:transparent;color:var(--ink);border-color:var(--rule)}
+.btn.ok{background:var(--verde);border-color:var(--verde);color:#fff}
+.btn.sm{padding:5px 9px;font-size:10px}
+.btn[disabled]{opacity:.35;cursor:not-allowed}
+.lk{background:none;border:0;padding:0;font:10px/1.4 var(--mono);
+  color:var(--detra);text-decoration:underline}
+.in{width:100%;padding:7px 9px;border:1px solid var(--rule);background:#fff;
+  color:var(--ink);font-size:14px;outline:none}
+.in:focus{border-color:var(--ink)}
+.lbl{font:9px/1 var(--mono);text-transform:uppercase;letter-spacing:.12em;
+  color:var(--ink40);margin-bottom:4px;display:block}
+.tab{background:none;border:0;border-bottom:2px solid transparent;
+  padding:10px 12px;font:10px/1 var(--mono);text-transform:uppercase;
+  letter-spacing:.12em;color:var(--ink40);white-space:nowrap}
+.tab.on{color:var(--ink);border-bottom-color:var(--ink)}
+.pill{padding:1px 5px;font:9px/15px var(--mono);color:#fff}
+.chip{border:1px solid var(--rule);background:#fff;padding:4px 10px;
+  font:10px/1 var(--mono);text-transform:uppercase;letter-spacing:.1em;color:var(--ink70)}
+.chip.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+table{width:100%;border-collapse:collapse}
+table.matriz{width:auto}
+.sticky{position:sticky;left:0;background:var(--card)}
+.ov{position:fixed;inset:0;background:rgba(16,28,46,.55);z-index:50;
+  overflow-y:auto;padding:16px;display:flex;justify-content:center;align-items:flex-start}
+.modal{background:#fff;border:1px solid var(--ink);width:100%;max-width:720px;margin:32px 0}
+.hint{font:10px/1.6 var(--mono);color:var(--ink40)}
+.sep{border-top:1px solid var(--rule)}
+@media(max-width:640px){.wrap{padding:0 12px}}
+</style>
+</head>
+<body>
+<div id="raiz"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js" crossorigin></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js" crossorigin></script>
+
+<script>
+/* =====================================================================
+   FACTURACIÓN Y DECLARACIONES · Equipo Arequipa
+   Módulo "facturacion" de la plataforma. Meta: cero multas.
+   Backend: Supabase (eq_personas, fact_facturas, fact_declaraciones,
+   fact_vencimientos, fact_config, fact_gastos_anuales).
+   Sin JSX: React.createElement va como h().
+   ===================================================================== */
+
+var SB_URL = "https://kiexpdaaoegbtesqmaff.supabase.co";
+var SB_KEY = "sb_publishable_pftOAOUR51_Q5gq-Qqra-g_cc0rzhth";
+
+var h = React.createElement;
+var useState = React.useState, useEffect = React.useEffect,
+    useMemo = React.useMemo, useCallback = React.useCallback;
+var db = window.supabase.createClient(SB_URL, SB_KEY);
+
+/* ---------------------------------------------------------------- utilidades */
+var MESES = ["enero","febrero","marzo","abril","mayo","junio","julio",
+             "agosto","setiembre","octubre","noviembre","diciembre"];
+var MC = ["E","F","M","A","M","J","J","A","S","O","N","D"];
+var GRUPOS = ["0","1","2-3","4-5","6-7","8-9"];
+
+function plural(n, sing, pl){ return n + " " + (n===1 ? sing : pl); }
+function money(n){
+  return "S/ " + (Number(n)||0).toLocaleString("es-PE",
+    {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+function miles(n){ return "S/ " + Math.round(Number(n)||0).toLocaleString("es-PE"); }
+function r2(n){ return Math.round(((Number(n)||0) + 1e-9) * 100) / 100; }
+function hoyISO(){
+  var d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset()*6e4).toISOString().slice(0,10);
+}
+function dias(iso){
+  if(!iso) return null;
+  return Math.round((new Date(iso+"T12:00:00") - new Date(hoyISO()+"T12:00:00"))/864e5);
+}
+function grupoDe(ruc){
+  if(!ruc) return "";
+  var d = +String(ruc).slice(-1);
+  return d===0?"0": d===1?"1": d<=3?"2-3": d<=5?"4-5": d<=7?"6-7":"8-9";
+}
+function rucValido(r){
+  var s = String(r||"").replace(/\D/g,"");
+  if(s.length !== 11) return false;
+  var w = [5,4,3,2,7,6,5,4,3,2], t = 0;
+  for(var i=0;i<10;i++) t += (+s[i]) * w[i];
+  var d = 11 - (t % 11);
+  if(d === 10) d = 0; if(d === 11) d = 1;
+  return d === +s[10];
+}
+function etiqMes(a,m){ return MESES[m-1] + " " + a; }
+function mesDe(iso){
+  return {anio:+iso.slice(0,4), mes:+iso.slice(5,7)};
+}
+function claveMes(a,m){ return a + "-" + String(m).padStart(2,"0"); }
+/* semana RW -> fechas. Los periodos de 14 dias arrancan el 25/12/2025 (jueves). */
+function inicioSemana(sem){
+  var base = new Date(Date.UTC(2025,11,25));
+  base.setUTCDate(base.getUTCDate() + (sem-1)*7);
+  return base.toISOString().slice(0,10);
+}
+function coincide(p, q){
+  if(!q) return true;
+  return ((p.nombre||"") + " " + (p.ruc||"") + " " + (p.codigo_asesor||""))
+    .toLowerCase().indexOf(q.toLowerCase()) >= 0;
+}
+
+/* ---------------------------------------------------------------- piezas UI */
+function Caps(p){
+  return h("div",{className:"caps",style:{fontSize:10,color:p.color||"var(--ink40)",
+    marginBottom:8}}, p.children);
+}
+function Kpi(p){
+  return h("div",{className:"card",style:{padding:"14px 16px"}},
+    h("div",{className:"caps",style:{fontSize:9,color:"var(--ink40)"}}, p.l),
+    h("div",{className:"mono",style:{fontSize:24,color:p.c||"var(--ink)",marginTop:6}}, p.v),
+    p.sub ? h("div",{className:"hint",style:{marginTop:4}}, p.sub) : null);
+}
+function Campo(p){
+  return h("label",{style:{display:"block"}},
+    h("span",{className:"lbl"}, p.label),
+    h("input",{className:"in", type:p.tipo||"text", value:p.value==null?"":p.value,
+      placeholder:p.ph||"", onChange:function(e){ p.onChange(e.target.value); },
+      style:p.tipo==="number"?{fontFamily:"var(--mono)"}:null}),
+    p.nota ? h("div",{className:"hint",style:{marginTop:3}}, p.nota) : null);
+}
+function Modal(p){
+  return h("div",{className:"ov", onClick:p.onClose},
+    h("div",{className:"modal", onClick:function(e){ e.stopPropagation(); }}, p.children));
+}
+function Vacio(p){
+  return h("div",{style:{padding:"56px 16px",textAlign:"center",color:"var(--ink70)"}},
+    h("div",{style:{fontSize:14}}, p.children),
+    p.nota ? h("div",{className:"hint",style:{marginTop:8}}, p.nota) : null);
+}
+
+/* ---------------------------------------------------------------- acceso */
+function Acceso(){
+  var s1 = useState(""), correo = s1[0], setCorreo = s1[1];
+  var s2 = useState(""), clave = s2[0], setClave = s2[1];
+  var s3 = useState(""), err = s3[0], setErr = s3[1];
+  var s4 = useState(false), yendo = s4[0], setYendo = s4[1];
+
+  function entrar(e){
+    e.preventDefault();
+    if(yendo) return;
+    setYendo(true); setErr("");
+    db.auth.signInWithPassword({email:correo, password:clave}).then(function(r){
+      if(r.error){ setErr("Correo o contraseña incorrectos."); setYendo(false); }
+    });
+  }
+  return h("div",{style:{minHeight:"100vh",display:"flex",alignItems:"center",
+      justifyContent:"center",padding:24}},
+    h("form",{className:"card",onSubmit:entrar,style:{width:"100%",maxWidth:380}},
+      h("div",{style:{padding:"20px 24px",borderBottom:"1px solid var(--rule)"}},
+        h("div",{className:"caps",style:{fontSize:9,color:"var(--ink40)"}},"Equipo Arequipa"),
+        h("h1",{style:{fontSize:19,fontWeight:700,margin:"4px 0 0"}},"Facturación"),
+        h("div",{className:"hint",style:{marginTop:4}},"y declaraciones · meta: cero multas")),
+      h("div",{style:{padding:"20px 24px"}},
+        h("div",{style:{marginBottom:12}},
+          h(Campo,{label:"Correo",tipo:"email",value:correo,onChange:setCorreo})),
+        h(Campo,{label:"Contraseña",tipo:"password",value:clave,onChange:setClave}),
+        err ? h("div",{className:"mono",style:{fontSize:11,color:"var(--alerta)",
+          marginTop:10}}, err) : null,
+        h("button",{className:"btn",type:"submit",disabled:!correo||!clave||yendo,
+          style:{width:"100%",marginTop:16}}, yendo?"Entrando…":"Entrar"),
+        h("div",{className:"hint",style:{marginTop:14}},
+          "Mismo acceso que el resto de la plataforma."))));
+}
+
+/* ---------------------------------------------------------------- app */
+function App(props){
+  var sesion = props.sesion;
+  var s1 = useState(true), cargando = s1[0], setCargando = s1[1];
+  var s2 = useState([]), personas = s2[0], setPersonas = s2[1];
+  var s3 = useState([]), facturas = s3[0], setFacturas = s3[1];
+  var s4 = useState([]), decls = s4[0], setDecls = s4[1];
+  var s5 = useState([]), venc = s5[0], setVenc = s5[1];
+  var s6 = useState(null), cfg = s6[0], setCfg = s6[1];
+  var s7 = useState([]), gastos = s7[0], setGastos = s7[1];
+  var s8 = useState("resumen"), vista = s8[0], setVista = s8[1];
+  var s9 = useState(null), aviso = s9[0], setAviso = s9[1];
+  var sA = useState(null), errCarga = sA[0], setErrCarga = sA[1];
+
+  function avisar(t){ setAviso(t); setTimeout(function(){ setAviso(null); }, 4000); }
+
+  var recargar = useCallback(function(){
+    return Promise.all([
+      db.from("eq_personas").select("id,nombre,codigo_asesor,ruc,cuenta_detraccion,cci,banco,"+
+        "cuenta_bancaria,codigo_division,factura_desde,regimen,activo,celular,correo,notas")
+        .order("nombre"),
+      db.from("fact_facturas").select("*").order("fecha_emision"),
+      db.from("fact_declaraciones").select("*"),
+      db.from("fact_vencimientos").select("*"),
+      db.from("fact_config").select("*").eq("id","vigente").maybeSingle(),
+      db.from("fact_gastos_anuales").select("*")
+    ]).then(function(r){
+      for(var i=0;i<r.length;i++){
+        if(r[i].error){ setErrCarga(r[i].error.message); setCargando(false); return; }
+      }
+      setPersonas(r[0].data||[]); setFacturas(r[1].data||[]); setDecls(r[2].data||[]);
+      setVenc(r[3].data||[]); setCfg(r[4].data||{igv:0.18,detraccion:0.10,
+        detraccion_umbral:700,renta:0.01,uit:5500});
+      setGastos(r[5].data||[]); setCargando(false);
+    });
+  },[]);
+  useEffect(function(){ recargar(); },[recargar]);
+
+  var P = useMemo(function(){
+    var m = {}; personas.forEach(function(p){ m[p.id] = p; }); return m;
+  },[personas]);
+
+  var emitidas = useMemo(function(){
+    return facturas.filter(function(f){ return f.estado !== "borrador" && f.estado !== "anulada"; });
+  },[facturas]);
+  var borradores = useMemo(function(){
+    return facturas.filter(function(f){ return f.estado === "borrador"; });
+  },[facturas]);
+
+  var totFact = useMemo(function(){
+    return r2(emitidas.reduce(function(s,f){ return s + Number(f.total); },0));
+  },[emitidas]);
+  var totPend = useMemo(function(){
+    return r2(borradores.reduce(function(s,f){ return s + Number(f.total); },0));
+  },[borradores]);
+  var sinRuc = useMemo(function(){
+    var fs = borradores.filter(function(f){ return !(P[f.persona_id]||{}).ruc; });
+    var ids = {}; fs.forEach(function(f){ ids[f.persona_id] = 1; });
+    return {monto:r2(fs.reduce(function(s,f){ return s+Number(f.total); },0)),
+            personas:Object.keys(ids).length};
+  },[borradores,P]);
+
+  var vmap = useMemo(function(){
+    var m = {};
+    venc.forEach(function(v){ m[v.anio+"|"+v.mes+"|"+v.grupo] = v.vence; });
+    return m;
+  },[venc]);
+  var dmap = useMemo(function(){
+    var m = {};
+    decls.forEach(function(d){
+      m[d.persona_id+"|"+d.tipo+"|"+d.anio+"|"+(d.mes==null?"":d.mes)] = d;
+    });
+    return m;
+  },[decls]);
+
+  /* Obligaciones mensuales: se esperan desde la primera factura emitida de
+     cada persona con RUC, hasta el mes pasado. El mes en curso se muestra
+     pero no cuenta como pendiente: se declara el mes siguiente. */
+  var oblig = useMemo(function(){
+    var hoy = mesDe(hoyISO());
+    var porPersona = {};
+    emitidas.forEach(function(f){
+      var k = f.persona_id; if(!k) return;
+      (porPersona[k] = porPersona[k] || []).push(f);
+    });
+    var out = [];
+    Object.keys(porPersona).forEach(function(pid){
+      var p = P[pid]; if(!p || !p.activo || !p.ruc) return;
+      var fs = porPersona[pid];
+      var prim = fs.map(function(f){ return f.fecha_emision; }).sort()[0];
+      var desde = p.factura_desde && p.factura_desde < prim ? p.factura_desde : prim;
+      var a = +desde.slice(0,4), m = +desde.slice(5,7), guard = 0;
+      while((a < hoy.anio || (a === hoy.anio && m <= hoy.mes)) && guard++ < 120){
+        var mias = fs.filter(function(f){
+          return +f.fecha_emision.slice(0,4) === a && +f.fecha_emision.slice(5,7) === m;
+        });
+        var d = dmap[pid+"|mensual|"+a+"|"+m] || {};
+        var igvCalc = r2(mias.reduce(function(s,f){ return s+Number(f.igv); },0));
+        var renCalc = r2(mias.reduce(function(s,f){ return s+Number(f.renta); },0));
+        var igv = d.igv_real == null ? igvCalc : Number(d.igv_real);
+        var renta = d.renta_real == null ? renCalc : Number(d.renta_real);
+        var pres = !!d.presentada_en;
+        out.push({
+          pid:pid, p:p, anio:a, mes:m, d:d, facturas:mias.length,
+          igvCalc:igvCalc, renCalc:renCalc, igv:igv, renta:renta,
+          sire:!!d.sire_generado, pres:pres,
+          igvPag:!!d.igv_pagado_en, renPag:!!d.renta_pagado_en,
+          cerrada: pres && (igv<=0 || !!d.igv_pagado_en) && (renta<=0 || !!d.renta_pagado_en),
+          vigente: !(a === hoy.anio && m === hoy.mes),
+          vence: vmap[a+"|"+m+"|"+grupoDe(p.ruc)] || null
+        });
+        m++; if(m > 12){ m = 1; a++; }
+      }
+    });
+    return out;
+  },[emitidas,P,dmap,vmap]);
+
+  var obPend = useMemo(function(){
+    return oblig.filter(function(o){ return !o.cerrada && o.vigente; });
+  },[oblig]);
+  var vencidas = useMemo(function(){
+    return obPend.filter(function(o){ return o.vence && dias(o.vence) < 0; });
+  },[obPend]);
+
+  /* ---- escrituras ---- */
+  function guardarDecl(o, patch){
+    var fila = Object.assign({
+      persona_id:o.pid, tipo:"mensual", anio:o.anio, mes:o.mes,
+      vence:o.vence, igv_real:o.igv, renta_real:o.renta
+    }, o.d.id?{id:o.d.id}:{}, patch);
+    return db.from("fact_declaraciones")
+      .upsert(fila,{onConflict:"persona_id,tipo,anio,mes"}).select()
+      .then(function(r){
+        if(r.error){ avisar("No se pudo guardar: " + r.error.message); return; }
+        setDecls(function(prev){
+          var nueva = r.data[0], otras = prev.filter(function(d){
+            return !(d.persona_id===nueva.persona_id && d.tipo===nueva.tipo &&
+                     d.anio===nueva.anio && d.mes===nueva.mes);
+          });
+          return otras.concat([nueva]);
+        });
+      });
+  }
+  function guardarVarias(obs, hacer){
+    var filas = obs.map(function(o){
+      return Object.assign({
+        persona_id:o.pid, tipo:"mensual", anio:o.anio, mes:o.mes,
+        vence:o.vence, igv_real:o.igv, renta_real:o.renta
+      }, o.d.id?{id:o.d.id}:{}, hacer(o));
+    });
+    if(!filas.length) return Promise.resolve();
+    return db.from("fact_declaraciones")
+      .upsert(filas,{onConflict:"persona_id,tipo,anio,mes"}).select()
+      .then(function(r){
+        if(r.error){ avisar("No se pudo guardar: " + r.error.message); return; }
+        setDecls(function(prev){
+          var clave = {};
+          r.data.forEach(function(d){ clave[d.persona_id+"|"+d.anio+"|"+d.mes] = 1; });
+          return prev.filter(function(d){
+            return !(d.tipo==="mensual" && clave[d.persona_id+"|"+d.anio+"|"+d.mes]);
+          }).concat(r.data);
+        });
+      });
+  }
+  function marcarFacturadas(ids, fecha, serie, numero){
+    return db.from("fact_facturas").update({
+      estado:"emitida", fecha_emision:fecha, fecha_estimada:false,
+      serie:serie||null, numero:numero||null, actualizado_en:new Date().toISOString()
+    }).in("id", ids).select().then(function(r){
+      if(r.error){ avisar("No se pudo marcar: " + r.error.message); return; }
+      var m = {}; r.data.forEach(function(f){ m[f.id] = f; });
+      setFacturas(function(prev){ return prev.map(function(f){ return m[f.id] || f; }); });
+      avisar(ids.length + " comisión(es) marcadas como facturadas.");
+    });
+  }
+  function desmarcar(f){
+    return db.from("fact_facturas").update({
+      estado:"borrador", fecha_estimada:true, serie:null, numero:null
+    }).eq("id", f.id).select().then(function(r){
+      if(r.error){ avisar("No se pudo deshacer: " + r.error.message); return; }
+      setFacturas(function(prev){ return prev.map(function(x){
+        return x.id===f.id ? r.data[0] : x; }); });
+    });
+  }
+  function guardarPersona(p){
+    var campos = ["ruc","cuenta_detraccion","cci","banco","cuenta_bancaria",
+                  "codigo_division","factura_desde","regimen","activo","celular","correo","notas"];
+    var patch = {}; campos.forEach(function(c){ patch[c] = p[c] === "" ? null : p[c]; });
+    return db.from("eq_personas").update(patch).eq("id", p.id).select().then(function(r){
+      if(r.error){ avisar("No se pudo guardar: " + r.error.message); return false; }
+      setPersonas(function(prev){ return prev.map(function(x){
+        return x.id===p.id ? Object.assign({}, x, r.data[0]) : x; }); });
+      avisar("Datos guardados.");
+      return true;
+    });
+  }
+  function guardarGasto(pid, anio, monto){
+    return db.from("fact_gastos_anuales").upsert({
+      persona_id:pid, anio:anio, gastos:Number(monto)||0,
+      actualizado_en:new Date().toISOString()
+    },{onConflict:"persona_id,anio"}).select().then(function(r){
+      if(r.error){ avisar("No se pudo guardar: " + r.error.message); return; }
+      setGastos(function(prev){
+        return prev.filter(function(g){
+          return !(g.persona_id===pid && g.anio===anio); }).concat(r.data);
+      });
+    });
+  }
+
+  if(cargando) return h("div",{className:"mono",style:{padding:"80px 16px",
+    textAlign:"center",color:"var(--ink40)",fontSize:12}}, "Cargando…");
+
+  if(errCarga) return h("div",{style:{padding:"60px 16px",textAlign:"center"}},
+    h("div",{style:{fontSize:15,marginBottom:10}},"No se pudieron leer los datos."),
+    h("div",{className:"hint",style:{maxWidth:460,margin:"0 auto"}}, errCarga),
+    h("div",{className:"hint",style:{marginTop:14}},
+      "Si dice que no hay permisos, tu cuenta necesita rol admin o gestor."),
+    h("button",{className:"btn sec",style:{marginTop:18},
+      onClick:function(){ db.auth.signOut(); }}, "Salir"));
+
+  var TABS = [
+    ["resumen","Resumen",0,null],
+    ["facturar","Por facturar",borradores.length,"var(--detra)"],
+    ["declaraciones","Declaraciones",obPend.length,
+      vencidas.length?"var(--alerta)":"var(--ambar)"],
+    ["padron","Padrón",0,null],
+    ["anual","Anual",0,null]
+  ];
+
+  return h("div",{style:{minHeight:"100vh"}},
+    h("div",{style:{background:"var(--card)",borderBottom:"1px solid var(--ink)"}},
+      h("div",{className:"wrap",style:{paddingTop:12}},
+        h("div",{style:{display:"flex",justifyContent:"space-between",
+            alignItems:"baseline",gap:12,flexWrap:"wrap"}},
+          h("h1",{style:{fontSize:17,fontWeight:600,margin:0}},"Facturación",
+            h("span",{className:"mono",style:{fontSize:11,color:"var(--ink40)",
+              fontWeight:400}}, " · Equipo Arequipa")),
+          h("div",{className:"mono",style:{fontSize:10,color:"var(--ink40)",
+              display:"flex",gap:10,alignItems:"center"}},
+            h("span",null, sesion.user.email),
+            h("button",{className:"lk",style:{color:"var(--ink40)"},
+              onClick:function(){ db.auth.signOut(); }},"salir")))),
+      h("div",{className:"wrap",style:{display:"flex",overflowX:"auto"}},
+        TABS.map(function(t){
+          return h("button",{key:t[0],className:"tab"+(vista===t[0]?" on":""),
+            onClick:function(){ setVista(t[0]); }},
+            t[1], t[2]>0 ? h("span",{className:"pill",
+              style:{background:t[3],marginLeft:5}}, t[2]) : null);
+        }))),
+
+    aviso ? h("div",{className:"wrap",style:{paddingTop:12}},
+      h("div",{className:"card mono",style:{padding:"8px 12px",fontSize:11,
+        borderColor:"var(--ink)"}}, aviso)) : null,
+
+    h("div",{className:"wrap",style:{padding:"18px 16px 60px"}},
+      vista==="resumen" ? h(Resumen,{personas:personas,emitidas:emitidas,
+        borradores:borradores,totFact:totFact,totPend:totPend,sinRuc:sinRuc,
+        oblig:oblig,obPend:obPend,vencidas:vencidas,ir:setVista}) : null,
+      vista==="facturar" ? h(PorFacturar,{borradores:borradores,emitidas:emitidas,
+        P:P,cfg:cfg,marcar:marcarFacturadas,desmarcar:desmarcar}) : null,
+      vista==="declaraciones" ? h(Declaraciones,{oblig:oblig,guardar:guardarDecl,
+        guardarVarias:guardarVarias,avisar:avisar}) : null,
+      vista==="padron" ? h(Padron,{personas:personas,facturas:facturas,
+        guardar:guardarPersona}) : null,
+      vista==="anual" ? h(Anual,{personas:personas,emitidas:emitidas,oblig:oblig,
+        gastos:gastos,cfg:cfg,guardarGasto:guardarGasto}) : null));
+}
+
+/* ---------------------------------------------------------------- resumen */
+function Resumen(p){
+  var porMes = useMemo(function(){
+    var m = {};
+    p.emitidas.forEach(function(f){
+      var k = f.fecha_emision.slice(0,7);
+      m[k] = (m[k]||0) + Number(f.total);
+    });
+    return Object.keys(m).sort().map(function(k){ return {k:k, v:m[k]}; });
+  },[p.emitidas]);
+  var tope = porMes.reduce(function(a,x){ return Math.max(a,x.v); },0) || 1;
+  var cerradas = p.oblig.filter(function(o){ return o.vigente && o.cerrada; }).length;
+  var declarables = p.oblig.filter(function(o){ return o.vigente; }).length;
+  var listas = p.borradores.length - p.borradores.filter(function(f){
+    return !f.ruc; }).length;
+  var montoListo = r2(p.borradores.filter(function(f){ return !!f.ruc; })
+    .reduce(function(s,f){ return s+Number(f.total); },0));
+
+  return h("div",{className:"grid"},
+    h("div",{style:{display:"grid",gap:12,
+      gridTemplateColumns:"repeat(auto-fit,minmax(190px,1fr))"}},
+      h(Kpi,{l:"Facturado en el año",v:miles(p.totFact),c:"var(--verde)",
+        sub:plural(p.emitidas.length,"comisión","comisiones")}),
+      h(Kpi,{l:"Pendiente por facturar",v:miles(p.totPend),c:"var(--detra)",
+        sub:plural(p.borradores.length,"comisión","comisiones")}),
+      h(Kpi,{l:"Trabado sin RUC",v:miles(p.sinRuc.monto),c:"var(--alerta)",
+        sub:plural(p.sinRuc.personas,"persona","personas")}),
+      h(Kpi,{l:"Declaraciones vencidas",v:p.vencidas.length,
+        c:p.vencidas.length?"var(--alerta)":"var(--verde)",
+        sub:cerradas+" de "+declarables+" cerradas"})),
+
+    porMes.length ? h("div",{className:"card",style:{padding:16}},
+      h(Caps,null,"Facturado por mes"),
+      h("div",{style:{display:"flex",alignItems:"flex-end",gap:6,height:130}},
+        porMes.map(function(x){
+          return h("div",{key:x.k,style:{flex:1,textAlign:"center"}},
+            h("div",{className:"mono",style:{fontSize:9,color:"var(--ink40)",
+              marginBottom:3}}, Math.round(x.v/1000)+"k"),
+            h("div",{style:{background:"var(--verde)",
+              height:Math.max(3, Math.round(x.v/tope*95))}}),
+            h("div",{className:"mono",style:{fontSize:9,color:"var(--ink40)",
+              marginTop:4}}, MC[+x.k.slice(5,7)-1]));
+        })),
+      h("div",{className:"hint",style:{marginTop:10}},
+        "Las fechas marcadas con ~ son estimadas: salen de la diferencia entre "+
+        "reportes semanales de Rena Ware, no de la factura.")) : null,
+
+    h("div",{style:{display:"grid",gap:12,
+      gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))"}},
+      h("div",{className:"card",style:{padding:16,borderLeft:"3px solid var(--detra)"}},
+        h(Caps,{color:"var(--detra)"},"Se puede facturar ya"),
+        h("div",{className:"mono",style:{fontSize:22}}, miles(montoListo)),
+        h("button",{className:"lk",style:{marginTop:8},
+          onClick:function(){ p.ir("facturar"); }},
+          plural(listas,"comisión","comisiones")+" de asesores con RUC →")),
+      h("div",{className:"card",style:{padding:16,
+          borderLeft:"3px solid "+(p.vencidas.length?"var(--alerta)":"var(--rule)")}},
+        h(Caps,{color:p.vencidas.length?"var(--alerta)":"var(--ink40)"},
+          "Declaraciones sin cerrar"),
+        h("div",{className:"mono",style:{fontSize:22}}, p.obPend.length),
+        h("button",{className:"lk",style:{marginTop:8},
+          onClick:function(){ p.ir("declaraciones"); }},
+          plural(p.vencidas.length,"vencida","vencidas")+" →"))),
+
+    h("div",{className:"card hint",style:{padding:"10px 14px"}},
+      plural(p.personas.length,"persona","personas")+" en el padrón · "+
+      p.personas.filter(function(x){ return x.ruc; }).length+" con RUC · "+
+      p.personas.filter(function(x){ return !x.ruc; }).length+" sin RUC"));
+}
+
+/* ---------------------------------------------------------------- por facturar */
+function PorFacturar(p){
+  var s1 = useState({}), sel = s1[0], setSel = s1[1];
+  var s2 = useState(""), q = s2[0], setQ = s2[1];
+  var s3 = useState(false), modal = s3[0], setModal = s3[1];
+  var s4 = useState(false), verHechas = s4[0], setVerHechas = s4[1];
+
+  var grupos = useMemo(function(){
+    var g = {};
+    p.borradores.forEach(function(f){
+      var per = p.P[f.persona_id];
+      if(!coincide(per||{nombre:f.asesor,ruc:f.ruc,codigo_asesor:f.codigo_asesor}, q)) return;
+      (g[f.persona_id] = g[f.persona_id] || {per:per, fs:[]}).fs.push(f);
+    });
+    return Object.keys(g).map(function(k){ return g[k]; }).sort(function(a,b){
+      var sa = a.fs.reduce(function(s,f){ return s+Number(f.total); },0);
+      var sb = b.fs.reduce(function(s,f){ return s+Number(f.total); },0);
+      return sb - sa;
+    });
+  },[p.borradores,p.P,q]);
+
+  var elegidas = Object.keys(sel).filter(function(k){ return sel[k]; });
+  var montoSel = r2(p.borradores.filter(function(f){ return sel[f.id]; })
+    .reduce(function(s,f){ return s+Number(f.total); },0));
+
+  function alternar(id){
+    setSel(function(prev){
+      var n = Object.assign({}, prev); n[id] = !n[id]; return n;
+    });
+  }
+  function todasDe(g){
+    var ids = g.fs.filter(function(f){ return !bloqueo(g.per, f); })
+                  .map(function(f){ return f.id; });
+    var todas = ids.every(function(i){ return sel[i]; });
+    setSel(function(prev){
+      var n = Object.assign({}, prev);
+      ids.forEach(function(i){ n[i] = !todas; });
+      return n;
+    });
+  }
+  function bloqueo(per, f){
+    if(!per || !per.ruc) return "sin RUC";
+    if(Number(f.total) > (p.cfg.detraccion_umbral||700) && !per.cuenta_detraccion)
+      return "falta cuenta de detracción";
+    return null;
+  }
+
+  return h("div",null,
+    h("div",{className:"row",style:{justifyContent:"space-between",marginBottom:14}},
+      h("input",{className:"in",style:{maxWidth:260},placeholder:"buscar nombre, RUC o código…",
+        value:q,onChange:function(e){ setQ(e.target.value); }}),
+      h("button",{className:"lk",onClick:function(){ setVerHechas(!verHechas); }},
+        verHechas ? "ver pendientes" : "ver ya facturadas")),
+
+    verHechas ? h(YaFacturadas,{emitidas:p.emitidas,P:p.P,q:q,desmarcar:p.desmarcar}) :
+    (!grupos.length ? h(Vacio,{nota:"Cuando llegue el próximo reporte FPD se cargan aquí."},
+      "No hay comisiones pendientes de facturar.") :
+    h("div",null,
+      grupos.map(function(g){
+        var suma = r2(g.fs.reduce(function(s,f){ return s+Number(f.total); },0));
+        var per = g.per || {};
+        return h("div",{key:(per.id||"x")+g.fs[0].id,className:"card",
+            style:{marginBottom:10}},
+          h("div",{style:{padding:"10px 14px",borderBottom:"1px solid var(--rule)",
+              display:"flex",justifyContent:"space-between",gap:10,flexWrap:"wrap"}},
+            h("div",null,
+              h("div",{style:{fontSize:14,fontWeight:600}}, per.nombre || g.fs[0].asesor),
+              h("div",{className:"hint"},
+                per.ruc ? ("RUC "+per.ruc+" · grupo "+grupoDe(per.ruc))
+                        : "sin RUC — no se puede facturar")),
+            h("div",{style:{textAlign:"right"}},
+              h("div",{className:"mono",style:{fontSize:15}}, money(suma)),
+              h("button",{className:"lk",onClick:function(){ todasDe(g); }},
+                "marcar todas"))),
+          g.fs.map(function(f){
+            var bloq = bloqueo(per, f);
+            return h("div",{key:f.id,style:{padding:"8px 14px",display:"flex",
+                alignItems:"center",gap:10,borderTop:"1px solid var(--rule)"}},
+              h("input",{type:"checkbox",checked:!!sel[f.id],disabled:!!bloq,
+                onChange:function(){ alternar(f.id); }}),
+              h("div",{style:{flex:1,minWidth:0}},
+                h("div",{className:"mono",style:{fontSize:11}},
+                  "semana "+f.etiqueta_semana+" · PB"+((f.periodo_ind%26)+1)),
+                bloq ? h("div",{className:"mono",style:{fontSize:10,
+                  color:"var(--alerta)"}}, bloq) : null),
+              h("div",{style:{textAlign:"right"}},
+                h("div",{className:"mono",style:{fontSize:13}}, money(f.total)),
+                h("div",{className:"hint"},
+                  "neto "+money(f.neto)+
+                  (Number(f.detraccion)>0 ? " · detr "+money(f.detraccion) : ""))));
+          }));
+      }),
+      elegidas.length ? h("div",{style:{position:"sticky",bottom:0,padding:"12px 0"}},
+        h("div",{className:"card",style:{padding:"10px 14px",borderColor:"var(--ink)",
+            display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}},
+          h("div",{className:"mono",style:{fontSize:12}},
+            elegidas.length+" seleccionadas · "+money(montoSel)),
+          h("button",{className:"btn",onClick:function(){ setModal(true); }},
+            "Marcar como facturadas"))) : null)),
+
+    modal ? h(ModalFacturar,{n:elegidas.length,onCerrar:function(){ setModal(false); },
+      onOk:function(fecha,serie,numero){
+        p.marcar(elegidas, fecha, serie, numero).then(function(){
+          setSel({}); setModal(false);
+        });
+      }}) : null);
+}
+
+function ModalFacturar(p){
+  var s1 = useState(hoyISO()), fecha = s1[0], setFecha = s1[1];
+  var s2 = useState("E001"), serie = s2[0], setSerie = s2[1];
+  var s3 = useState(""), num = s3[0], setNum = s3[1];
+  return h(Modal,{onClose:p.onCerrar},
+    h("div",{style:{padding:"18px 20px",borderBottom:"1px solid var(--rule)"}},
+      h("div",{style:{fontSize:16,fontWeight:600}},
+        "Marcar "+p.n+" comisión(es) como facturadas"),
+      h("div",{className:"hint",style:{marginTop:4}},
+        "La fecha decide en qué mes entra la declaración.")),
+    h("div",{style:{padding:"18px 20px"}},
+      h("div",{style:{display:"grid",gap:12,
+        gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))"}},
+        h(Campo,{label:"Fecha de emisión",tipo:"date",value:fecha,onChange:setFecha}),
+        h(Campo,{label:"Serie",value:serie,onChange:setSerie,ph:"E001"}),
+        h(Campo,{label:"Número (opcional)",value:num,onChange:setNum,ph:"12"})),
+      h("div",{className:"hint",style:{marginTop:12}},
+        p.n > 1 ? "Si son de semanas distintas y emitiste una factura por semana, "+
+          "márcalas de a una para guardar cada número." : "")),
+    h("div",{style:{padding:"14px 20px",borderTop:"1px solid var(--rule)",
+        display:"flex",justifyContent:"flex-end",gap:8}},
+      h("button",{className:"btn sec",onClick:p.onCerrar},"Cancelar"),
+      h("button",{className:"btn ok",disabled:!fecha,
+        onClick:function(){ p.onOk(fecha, serie, num); }},"Confirmar")));
+}
+
+function YaFacturadas(p){
+  var fs = p.emitidas.filter(function(f){
+    return coincide(p.P[f.persona_id] ||
+      {nombre:f.asesor,ruc:f.ruc,codigo_asesor:f.codigo_asesor}, p.q);
+  }).slice().sort(function(a,b){
+    return a.fecha_emision < b.fecha_emision ? 1 : -1;
+  });
+  if(!fs.length) return h(Vacio,null,"Todavía no hay facturas registradas.");
+  return h("div",{className:"card"},
+    fs.map(function(f,i){
+      return h("div",{key:f.id,style:{padding:"9px 14px",display:"flex",
+          justifyContent:"space-between",gap:10,flexWrap:"wrap",
+          borderTop:i?"1px solid var(--rule)":"none"}},
+        h("div",{style:{minWidth:0}},
+          h("div",{style:{fontSize:13}}, f.asesor),
+          h("div",{className:"hint"},
+            "semana "+f.etiqueta_semana+
+            (f.serie ? " · "+f.serie+"-"+(f.numero||"?") : "")+
+            " · "+f.fecha_emision+(f.fecha_estimada?" ~":""))),
+        h("div",{style:{textAlign:"right"}},
+          h("div",{className:"mono",style:{fontSize:13}}, money(f.total)),
+          h("button",{className:"lk",style:{color:"var(--ink40)"},
+            onClick:function(){ p.desmarcar(f); }},"deshacer")));
+    }));
+}
+
+/* ---------------------------------------------------------------- declaraciones */
+function Declaraciones(p){
+  var hoy = mesDe(hoyISO());
+  var prev = hoy.mes === 1 ? {anio:hoy.anio-1, mes:12} : {anio:hoy.anio, mes:hoy.mes-1};
+  var s1 = useState("matriz"), modo = s1[0], setModo = s1[1];
+  var s2 = useState(claveMes(prev.anio, prev.mes)), per = s2[0], setPer = s2[1];
+  var s3 = useState(""), q = s3[0], setQ = s3[1];
+
+  if(!p.oblig.length) return h(Vacio,{nota:"Nacen cuando un asesor con RUC "+
+    "tiene su primera factura emitida."},"Todavía no hay obligaciones mensuales.");
+
+  var meses = {};
+  p.oblig.forEach(function(o){ meses[claveMes(o.anio,o.mes)] = 1; });
+  var listaMeses = Object.keys(meses).sort();
+
+  var delMes = p.oblig.filter(function(o){
+    return claveMes(o.anio,o.mes) === per && coincide(o.p, q);
+  });
+  var resolver = delMes.filter(function(o){ return !o.cerrada; })
+    .sort(function(a,b){ return (a.vence||"9999") < (b.vence||"9999") ? -1 : 1; });
+  var listas = delMes.filter(function(o){ return o.cerrada; });
+  var sinSire = resolver.filter(function(o){ return !o.sire; });
+  var porPres = resolver.filter(function(o){ return o.sire && !o.pres; });
+  var enCurso = delMes.length && !delMes[0].vigente;
+
+  return h("div",null,
+    h("div",{className:"row",style:{justifyContent:"space-between",marginBottom:14}},
+      h("div",{className:"row"},
+        h("button",{className:"chip"+(modo==="matriz"?" on":""),
+          onClick:function(){ setModo("matriz"); }},"Año completo"),
+        h("button",{className:"chip"+(modo==="mes"?" on":""),
+          onClick:function(){ setModo("mes"); }},"Trabajar un mes"),
+        modo==="mes" ? h("select",{className:"in",style:{width:"auto"},value:per,
+          onChange:function(e){ setPer(e.target.value); }},
+          listaMeses.map(function(k){
+            return h("option",{key:k,value:k},
+              etiqMes(+k.slice(0,4), +k.slice(5,7)));
+          })) : null),
+      h("input",{className:"in",style:{maxWidth:230},placeholder:"buscar…",
+        value:q,onChange:function(e){ setQ(e.target.value); }})),
+
+    modo==="matriz" ? h(Matriz,{oblig:p.oblig,q:q,
+      ir:function(k){ setPer(k); setModo("mes"); }}) :
+    h("div",null,
+      enCurso ? h("div",{className:"card hint",style:{padding:"9px 13px",marginBottom:14}},
+        "Mes en curso: se declara el mes siguiente. Aparece para que veas lo que "+
+        "viene; no cuenta como pendiente.") : null,
+      resolver.length ? h("div",{className:"card row",
+          style:{padding:"9px 13px",marginBottom:14}},
+        h("span",{className:"caps",style:{fontSize:9,color:"var(--ink40)",margin:0}},
+          "todo el mes"),
+        sinSire.length ? h("button",{className:"btn sec sm",onClick:function(){
+          p.guardarVarias(sinSire,function(){ return {sire_generado:true}; })
+           .then(function(){ p.avisar("SIRE marcado."); });
+        }},"SIRE de "+sinSire.length) : null,
+        porPres.length ? h("button",{className:"btn sm",onClick:function(){
+          p.guardarVarias(porPres,function(){
+            return {sire_generado:true, presentada_en:hoyISO()}; })
+           .then(function(){ p.avisar(porPres.length+" presentadas."); });
+        }},"Presentar "+porPres.length) : null,
+        h("button",{className:"btn ok sm",onClick:function(){
+          p.guardarVarias(resolver,function(o){
+            return {sire_generado:true, presentada_en:o.d.presentada_en||hoyISO(),
+              igv_pagado_en:o.igv>0?(o.d.igv_pagado_en||hoyISO()):null,
+              renta_pagado_en:o.renta>0?(o.d.renta_pagado_en||hoyISO()):null};
+          }).then(function(){ p.avisar(resolver.length+" cerradas."); });
+        }},"Cerrar "+resolver.length+" · ya estaba hecho")) : null,
+
+      !delMes.length ? h(Vacio,null,"Sin obligaciones en este mes.") : null,
+      resolver.map(function(o){
+        return h(FilaDecl,{key:o.pid+"|"+o.anio+"|"+o.mes,o:o,guardar:p.guardar});
+      }),
+      listas.length ? h("div",{style:{marginTop:18}},
+        h(Caps,{color:"var(--verde)"},"Cerradas · "+listas.length),
+        listas.map(function(o){
+          return h("div",{key:o.pid+"c",className:"card",
+              style:{padding:"8px 13px",marginBottom:5,display:"flex",
+              justifyContent:"space-between",gap:10,flexWrap:"wrap"}},
+            h("div",{style:{fontSize:13}}, o.p.nombre, " ",
+              h("span",{className:"mono",style:{fontSize:10,color:"var(--verde)"}},
+                "✓ declarada y pagada")),
+            h("div",{className:"mono",style:{fontSize:10,color:"var(--ink40)",
+                display:"flex",gap:8,alignItems:"center"}},
+              o.igv>0||o.renta>0 ? "IGV "+money(o.igv)+" · renta "+money(o.renta)
+                                 : "en cero",
+              h("button",{className:"lk",style:{color:"var(--ink40)"},
+                onClick:function(){
+                  p.guardar(o,{presentada_en:null,igv_pagado_en:null,
+                    renta_pagado_en:null});
+                }},"deshacer")));
+        })) : null));
+}
+
+function Matriz(p){
+  var gente = {};
+  p.oblig.forEach(function(o){ if(coincide(o.p,p.q)) gente[o.pid] = o.p; });
+  var ids = Object.keys(gente);
+  if(!ids.length) return h(Vacio,null,"Nadie con obligación mensual.");
+  var anio = new Date().getFullYear();
+  var idx = {};
+  p.oblig.forEach(function(o){ idx[o.pid+"|"+o.anio+"|"+o.mes] = o; });
+
+  function celda(o){
+    if(!o) return {bg:"transparent",t:"·",c:"var(--rule)"};
+    if(o.cerrada) return {bg:"var(--verde)",t:"✓",c:"#fff"};
+    if(!o.vigente) return {bg:"var(--paper)",t:"◦",c:"var(--ink40)"};
+    var d = o.vence ? dias(o.vence) : null;
+    if(d !== null && d < 0) return {bg:"var(--alerta)",t:"!",c:"#fff"};
+    if(!o.pres) return {bg:"var(--ambar)",t:"·",c:"#fff"};
+    return {bg:"var(--detra)",t:"$",c:"#fff"};
+  }
+  return h("div",null,
+    h("div",{className:"card",style:{overflowX:"auto"}},
+      h("table",{className:"matriz",style:{minWidth:530}},
+        h("thead",null, h("tr",{style:{borderBottom:"1px solid var(--rule)"}},
+          h("th",{className:"caps sticky",style:{fontSize:9,color:"var(--ink40)",
+            textAlign:"left",padding:"8px 12px",minWidth:155}}, anio),
+          MC.map(function(m,i){
+            return h("th",{key:i,className:"mono",
+              style:{fontSize:10,color:"var(--ink40)",width:30,padding:"8px 0"}}, m);
+          }))),
+        h("tbody",null, ids.map(function(pid){
+          var per = gente[pid];
+          return h("tr",{key:pid,style:{borderTop:"1px solid var(--rule)"}},
+            h("td",{className:"sticky",style:{padding:"7px 12px",
+                borderRight:"1px solid var(--rule)"}},
+              h("div",{style:{fontSize:12,fontWeight:600,whiteSpace:"nowrap"}},
+                per.nombre.length>24 ? per.nombre.slice(0,24)+"…" : per.nombre),
+              h("div",{className:"hint"},"grupo "+grupoDe(per.ruc))),
+            MC.map(function(_,i){
+              var o = idx[pid+"|"+anio+"|"+(i+1)], c = celda(o);
+              return h("td",{key:i,style:{padding:0,textAlign:"center"}},
+                h("button",{className:"mono",disabled:!o,
+                  onClick:function(){ if(o) p.ir(claveMes(o.anio,o.mes)); },
+                  style:{width:26,height:26,background:c.bg,color:c.c,border:0,
+                    fontSize:11,opacity:o?1:.4,
+                    cursor:o?"pointer":"default"}}, c.t));
+            }));
+        })))),
+    h("div",{className:"row mono",style:{fontSize:10,color:"var(--ink70)",
+        marginTop:10,gap:14}},
+      [["var(--verde)","✓","cerrada"],["var(--ambar)","·","por declarar"],
+       ["var(--detra)","$","declarada, falta pagar"],["var(--alerta)","!","vencida"]]
+      .map(function(x,i){
+        return h("span",{key:i},
+          h("span",{style:{background:x[0],color:"#fff",padding:"1px 5px"}}, x[1]),
+          " "+x[2]);
+      }),
+      h("span",null, h("span",{style:{background:"var(--paper)",color:"var(--ink40)",
+        padding:"1px 5px",border:"1px solid var(--rule)"}},"◦")," mes en curso")));
+}
+
+function FilaDecl(p){
+  var o = p.o;
+  var s1 = useState(false), edit = s1[0], setEdit = s1[1];
+  var s2 = useState(String(o.igv)), igv = s2[0], setIgv = s2[1];
+  var s3 = useState(String(o.renta)), renta = s3[0], setRenta = s3[1];
+  var d = o.vence ? dias(o.vence) : null;
+  var color = d !== null && d < 0 ? "var(--alerta)" : d !== null && d <= 5
+    ? "var(--ambar)" : "var(--ink40)";
+
+  function Paso(q){
+    return h("button",{className:"btn sm "+(q.hecho?"ok":q.listo?"":"sec"),
+      disabled:!q.listo && !q.hecho, onClick:q.onClick,
+      style:{opacity:(!q.listo&&!q.hecho)?.35:1}}, (q.hecho?"✓ ":"")+q.t);
+  }
+  return h("div",{className:"card",style:{padding:"11px 14px",marginBottom:7}},
+    h("div",{style:{display:"flex",justifyContent:"space-between",gap:10,
+        flexWrap:"wrap",alignItems:"baseline"}},
+      h("div",null,
+        h("span",{style:{fontSize:14,fontWeight:600}}, o.p.nombre),
+        h("span",{className:"hint"}, "  RUC "+o.p.ruc+" · grupo "+grupoDe(o.p.ruc)+
+          " · "+plural(o.facturas,"factura","facturas"))),
+      h("div",{className:"mono",style:{fontSize:11,color:color}},
+        o.vence ? ("vence "+o.vence+(d<0?" · vencida hace "+(-d)+"d":
+          d===0?" · hoy":" · faltan "+d+"d")) : "sin fecha")),
+
+    h("div",{className:"row",style:{marginTop:10,gap:8}},
+      h(Paso,{t:"SIRE",hecho:o.sire,listo:true,
+        onClick:function(){ p.guardar(o,{sire_generado:!o.sire}); }}),
+      h(Paso,{t:"Presentar 621",hecho:o.pres,listo:o.sire,
+        onClick:function(){
+          p.guardar(o,{sire_generado:true,
+            presentada_en:o.pres?null:hoyISO()});
+        }}),
+      o.igv > 0 ? h(Paso,{t:"IGV 1011 "+money(o.igv),hecho:o.igvPag,listo:o.pres,
+        onClick:function(){ p.guardar(o,{igv_pagado_en:o.igvPag?null:hoyISO()}); }})
+        : h("span",{className:"hint"},"IGV en cero"),
+      o.renta > 0 ? h(Paso,{t:"Renta 3121 "+money(o.renta),hecho:o.renPag,listo:o.pres,
+        onClick:function(){ p.guardar(o,{renta_pagado_en:o.renPag?null:hoyISO()}); }})
+        : h("span",{className:"hint"},"renta en cero"),
+      h("button",{className:"lk",onClick:function(){ setEdit(!edit); }},
+        edit?"cerrar":"corregir montos")),
+
+    edit ? h("div",{className:"sep",style:{marginTop:10,paddingTop:10}},
+      h("div",{style:{display:"grid",gap:10,
+          gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))"}},
+        h(Campo,{label:"IGV a pagar",tipo:"number",value:igv,onChange:setIgv,
+          nota:"calculado "+money(o.igvCalc)}),
+        h(Campo,{label:"Renta a pagar",tipo:"number",value:renta,onChange:setRenta,
+          nota:"calculado "+money(o.renCalc)})),
+      h("div",{className:"row",style:{marginTop:10}},
+        h("button",{className:"btn sm",onClick:function(){
+          p.guardar(o,{igv_real:Number(igv)||0, renta_real:Number(renta)||0});
+          setEdit(false);
+        }},"Guardar"),
+        h("span",{className:"hint"},
+          "El IGV puede bajar con compras; la renta es 1% del neto."))) : null);
+}
+
+/* ---------------------------------------------------------------- padrón */
+function Padron(p){
+  var s1 = useState(""), q = s1[0], setQ = s1[1];
+  var s2 = useState("todos"), filtro = s2[0], setFiltro = s2[1];
+  var s3 = useState(null), abierta = s3[0], setAbierta = s3[1];
+
+  var conFacturas = useMemo(function(){
+    var m = {};
+    p.facturas.forEach(function(f){ if(f.persona_id) m[f.persona_id] = 1; });
+    return m;
+  },[p.facturas]);
+
+  var lista = p.personas.filter(function(x){
+    if(!coincide(x,q)) return false;
+    if(filtro==="conruc") return !!x.ruc;
+    if(filtro==="sinruc") return !x.ruc && conFacturas[x.id];
+    if(filtro==="inactivos") return !x.activo;
+    if(filtro==="todos") return conFacturas[x.id] || x.ruc;
+    return true;
+  });
+
+  var FILTROS = [["todos","Con movimiento"],["conruc","Con RUC"],
+                 ["sinruc","Sin RUC"],["inactivos","Desactivados"]];
+  return h("div",null,
+    h("div",{className:"row",style:{justifyContent:"space-between",marginBottom:14}},
+      h("div",{className:"row",style:{gap:6}},
+        FILTROS.map(function(f){
+          return h("button",{key:f[0],className:"chip"+(filtro===f[0]?" on":""),
+            onClick:function(){ setFiltro(f[0]); }}, f[1]);
+        })),
+      h("input",{className:"in",style:{maxWidth:230},placeholder:"buscar…",
+        value:q,onChange:function(e){ setQ(e.target.value); }})),
+
+    h("div",{className:"hint",style:{marginBottom:10}},
+      plural(lista.length,"persona","personas")),
+
+    h("div",{className:"card"},
+      lista.map(function(x,i){
+        var ok = x.ruc ? rucValido(x.ruc) : null;
+        return h("div",{key:x.id,style:{padding:"9px 14px",display:"flex",
+            justifyContent:"space-between",gap:10,flexWrap:"wrap",
+            alignItems:"center",borderTop:i?"1px solid var(--rule)":"none",
+            opacity:x.activo?1:.55}},
+          h("div",{style:{minWidth:0}},
+            h("div",{style:{fontSize:13,fontWeight:600}}, x.nombre,
+              !x.activo ? h("span",{className:"hint"}," · desactivado") : null),
+            h("div",{className:"hint"},
+              (x.codigo_asesor||"sin código")+
+              (x.ruc ? " · RUC "+x.ruc+(ok===false?" (inválido)":"")+
+                       " · grupo "+grupoDe(x.ruc) : " · sin RUC")+
+              (x.cuenta_detraccion ? " · detracción ok" : ""))),
+          h("button",{className:"btn sec sm",
+            onClick:function(){ setAbierta(x); }},"Abrir"));
+      })),
+
+    abierta ? h(Ficha,{persona:abierta,facturas:p.facturas.filter(function(f){
+        return f.persona_id === abierta.id; }),
+      onCerrar:function(){ setAbierta(null); },guardar:p.guardar}) : null);
+}
+
+function Ficha(p){
+  var s1 = useState(Object.assign({}, p.persona)), x = s1[0], setX = s1[1];
+  var s2 = useState("datos"), tab = s2[0], setTab = s2[1];
+  function set(k){ return function(v){
+    setX(function(prev){ var n = Object.assign({}, prev); n[k] = v; return n; }); }; }
+  var ok = x.ruc ? rucValido(x.ruc) : null;
+  var emit = p.facturas.filter(function(f){ return f.estado !== "borrador"; });
+  var pend = p.facturas.filter(function(f){ return f.estado === "borrador"; });
+
+  var TABS = [["datos","Datos"],["tributario","Tributario"],["cuentas","Cuentas"]];
+  return h(Modal,{onClose:p.onCerrar},
+    h("div",{style:{padding:"16px 20px",borderBottom:"1px solid var(--rule)"}},
+      h("div",{style:{fontSize:17,fontWeight:600}}, x.nombre),
+      h("div",{className:"hint",style:{marginTop:3}},
+        (x.codigo_asesor||"sin código")+" · "+plural(emit.length,"facturada","facturadas")+" · "+
+        pend.length+" pendientes")),
+    h("div",{style:{display:"flex",borderBottom:"1px solid var(--rule)",
+        padding:"0 12px"}},
+      TABS.map(function(t){
+        return h("button",{key:t[0],className:"tab"+(tab===t[0]?" on":""),
+          onClick:function(){ setTab(t[0]); }}, t[1]);
+      })),
+    h("div",{style:{padding:"18px 20px"}},
+      tab==="datos" ? h("div",{style:{display:"grid",gap:12,
+          gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))"}},
+        h(Campo,{label:"Código de asesor",value:x.codigo_asesor,
+          onChange:set("codigo_asesor")}),
+        h(Campo,{label:"Celular",value:x.celular,onChange:set("celular")}),
+        h(Campo,{label:"Correo",value:x.correo,onChange:set("correo")})) : null,
+
+      tab==="tributario" ? h("div",null,
+        h("div",{style:{display:"grid",gap:12,
+            gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))"}},
+          h(Campo,{label:"RUC",value:x.ruc,onChange:set("ruc"),
+            nota: x.ruc ? (ok ? "válido" : "no pasa el dígito verificador") : "11 dígitos"}),
+          h(Campo,{label:"Régimen",value:x.regimen,onChange:set("regimen"),ph:"RMT"}),
+          h(Campo,{label:"Código de división",value:x.codigo_division,
+            onChange:set("codigo_division"),ph:"wv08"}),
+          h(Campo,{label:"Declara desde",tipo:"date",value:x.factura_desde,
+            onChange:set("factura_desde"),
+            nota:"primer mes con obligación mensual"})),
+        h("div",{className:"hint",style:{marginTop:12}},
+          x.ruc ? ("Grupo "+grupoDe(x.ruc)+" del cronograma SUNAT: "+
+            "declara según el último dígito del RUC.") :
+            "Sin RUC no se le puede facturar ni declarar."),
+        h("div",{className:"card hint",style:{padding:"9px 13px",marginTop:12}},
+          "Si facturó este año, la declaración anual es obligatoria aunque lo "+
+          "desactives o suspenda actividades.")) : null,
+
+      tab==="cuentas" ? h("div",{style:{display:"grid",gap:12,
+          gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))"}},
+        h(Campo,{label:"Banco",value:x.banco,onChange:set("banco")}),
+        h(Campo,{label:"Cuenta",value:x.cuenta_bancaria,
+          onChange:set("cuenta_bancaria")}),
+        h(Campo,{label:"CCI",value:x.cci,onChange:set("cci"),
+          nota:"se asocia al RUC desde el portal"}),
+        h(Campo,{label:"Cuenta de detracción (BN)",value:x.cuenta_detraccion,
+          onChange:set("cuenta_detraccion"),
+          nota:"obligatoria si factura más de S/700"})) : null,
+
+      h("div",{className:"sep",style:{marginTop:16,paddingTop:14}},
+        h("span",{className:"lbl"},"Notas"),
+        h("textarea",{className:"in",rows:2,value:x.notas||"",
+          placeholder:"Quedó en sacar RUC el lunes…",
+          onChange:function(e){ set("notas")(e.target.value); }}))),
+
+    h("div",{style:{padding:"14px 20px",borderTop:"1px solid var(--rule)",
+        display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap"}},
+      h("button",{className:"btn sec sm",
+        onClick:function(){ set("activo")(!x.activo); }},
+        x.activo ? "Desactivar" : "Reactivar"),
+      h("div",{className:"row",style:{gap:8}},
+        h("button",{className:"btn sec",onClick:p.onCerrar},"Cancelar"),
+        h("button",{className:"btn",onClick:function(){
+          p.guardar(x).then(function(ok){ if(ok) p.onCerrar(); });
+        }},"Guardar"))));
+}
+
+/* ---------------------------------------------------------------- anual */
+function Anual(p){
+  var anio = new Date().getFullYear();
+  var uit = Number((p.cfg||{}).uit) || 5500;
+  var gmap = {};
+  p.gastos.forEach(function(g){ if(g.anio===anio) gmap[g.persona_id] = g; });
+
+  var filas = useMemo(function(){
+    var porP = {};
+    p.emitidas.forEach(function(f){
+      if(!f.persona_id || f.fecha_emision.slice(0,4) !== String(anio)) return;
+      (porP[f.persona_id] = porP[f.persona_id] || []).push(f);
+    });
+    return Object.keys(porP).map(function(pid){
+      var per = null;
+      for(var i=0;i<p.personas.length;i++)
+        if(p.personas[i].id === pid){ per = p.personas[i]; break; }
+      if(!per) return null;
+      var fs = porP[pid];
+      var ing = r2(fs.reduce(function(s,f){ return s+Number(f.neto); },0));
+      var g = Number((gmap[pid]||{}).gastos) || 0;
+      var neta = Math.max(0, r2(ing - g));
+      var t1 = Math.min(neta, 15*uit), t2 = Math.max(0, neta - 15*uit);
+      var imp = r2(t1*0.10 + t2*0.295);
+      var aCuenta = r2(p.oblig.filter(function(o){
+        return o.pid === pid && o.anio === anio;
+      }).reduce(function(s,o){ return s + Number(o.renta); }, 0));
+      return {pid:pid, per:per, ing:ing, gastos:g, neta:neta, imp:imp,
+              aCuenta:aCuenta, saldo:r2(imp - aCuenta), n:fs.length};
+    }).filter(Boolean).sort(function(a,b){ return b.ing - a.ing; });
+  },[p.emitidas,p.personas,p.gastos,p.oblig,uit,anio]);
+
+  var totIng = r2(filas.reduce(function(s,x){ return s+x.ing; },0));
+  var totImp = r2(filas.reduce(function(s,x){ return s+x.imp; },0));
+  var totSaldo = r2(filas.reduce(function(s,x){ return s+x.saldo; },0));
+
+  return h("div",null,
+    h("div",{style:{display:"grid",gap:12,marginBottom:16,
+        gridTemplateColumns:"repeat(auto-fit,minmax(190px,1fr))"}},
+      h(Kpi,{l:"Ingreso neto "+anio,v:miles(totIng),sub:plural(filas.length,"asesor","asesores")}),
+      h(Kpi,{l:"Impuesto proyectado",v:miles(totImp),c:"var(--ambar)",
+        sub:"10% hasta 15 UIT, 29.5% encima"}),
+      h(Kpi,{l:"Saldo por regularizar",v:miles(totSaldo),
+        c:totSaldo>0?"var(--alerta)":"var(--verde)",
+        sub:"impuesto menos pagos a cuenta"})),
+
+    h("div",{className:"card hint",style:{padding:"10px 14px",marginBottom:14}},
+      "UIT "+anio+": "+money(uit)+". La declaración anual es obligatoria para "+
+      "todo el que facturó en el ejercicio, aunque hoy esté desactivado o haya "+
+      "suspendido actividades. Carga los gastos para que la proyección sirva."),
+
+    !filas.length ? h(Vacio,null,"Nadie ha facturado este año.") :
+    h("div",{className:"card",style:{overflowX:"auto"}},
+      h("table",{style:{minWidth:720}},
+        h("thead",null, h("tr",{style:{borderBottom:"1px solid var(--rule)"}},
+          ["Asesor","Ingreso neto","Gastos","Renta neta","Impuesto",
+           "Pagos a cuenta","Saldo"].map(function(t,i){
+            return h("th",{key:i,className:"caps",style:{fontSize:9,
+              color:"var(--ink40)",padding:"8px 10px",
+              textAlign:i?"right":"left"}}, t);
+          }))),
+        h("tbody",null, filas.map(function(f){
+          return h("tr",{key:f.pid,style:{borderTop:"1px solid var(--rule)"}},
+            h("td",{style:{padding:"8px 10px"}},
+              h("div",{style:{fontSize:12,fontWeight:600}}, f.per.nombre),
+              h("div",{className:"hint"},
+                plural(f.n,"factura","facturas")+(f.per.activo?"":" · inactivo"))),
+            h("td",{className:"mono",style:{padding:"8px 10px",textAlign:"right",
+              fontSize:12}}, money(f.ing)),
+            h("td",{style:{padding:"6px 10px",textAlign:"right"}},
+              h("input",{className:"in",type:"number",
+                style:{width:110,textAlign:"right",fontFamily:"var(--mono)",
+                  fontSize:12,padding:"4px 6px"},
+                defaultValue:f.gastos,
+                onBlur:function(e){
+                  p.guardarGasto(f.pid, anio, e.target.value);
+                }})),
+            h("td",{className:"mono",style:{padding:"8px 10px",textAlign:"right",
+              fontSize:12}}, money(f.neta)),
+            h("td",{className:"mono",style:{padding:"8px 10px",textAlign:"right",
+              fontSize:12,color:"var(--ambar)"}}, money(f.imp)),
+            h("td",{className:"mono",style:{padding:"8px 10px",textAlign:"right",
+              fontSize:12,color:"var(--ink40)"}}, money(f.aCuenta)),
+            h("td",{className:"mono",style:{padding:"8px 10px",textAlign:"right",
+              fontSize:12,color:f.saldo>0?"var(--alerta)":"var(--verde)"}},
+              money(f.saldo)));
+        })))),
+
+    h("div",{className:"card",style:{padding:16,marginTop:14}},
+      h(Caps,null,"Cuánto baja el impuesto con gastos"),
+      h("div",{className:"row",style:{gap:18}},
+        [0,0.1,0.2,0.3].map(function(pc){
+          var neta = Math.max(0, r2(totIng*(1-pc)));
+          var t1 = Math.min(neta, 15*uit), t2 = Math.max(0, neta-15*uit);
+          return h("div",{key:pc},
+            h("div",{className:"hint"}, Math.round(pc*100)+"% de gastos"),
+            h("div",{className:"mono",style:{fontSize:15}},
+              miles(r2(t1*0.10 + t2*0.295))));
+        })),
+      h("div",{className:"hint",style:{marginTop:10}},
+        "Sobre el total del equipo. Sirve para dimensionar cuánto importa que "+
+        "cada asesor junte sus comprobantes de gasto.")));
+}
+
+/* ---------------------------------------------------------------- arranque */
+function Raiz(){
+  var s1 = useState(undefined), sesion = s1[0], setSesion = s1[1];
+  useEffect(function(){
+    db.auth.getSession().then(function(r){ setSesion(r.data.session || null); });
+    var sub = db.auth.onAuthStateChange(function(_e, s){ setSesion(s || null); });
+    return function(){ if(sub && sub.data) sub.data.subscription.unsubscribe(); };
+  },[]);
+  if(sesion === undefined) return h("div",{className:"mono",
+    style:{padding:"80px 16px",textAlign:"center",color:"var(--ink40)",
+      fontSize:12}}, "…");
+  if(!sesion) return h(Acceso,null);
+  return h(App,{sesion:sesion, key:sesion.user.id});
+}
+
+ReactDOM.createRoot(document.getElementById("raiz")).render(h(Raiz,null));
+</script>
+</body>
+</html>
