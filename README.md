@@ -9,6 +9,16 @@ registro, calcula lo que se debe y avisa antes de que venza.
 
 ## Qué hace
 
+- **Agenda** — la pantalla de cero multas. Todo lo que tiene fecha en una sola
+  lista ordenada por vencimiento: cuotas de fraccionamiento (tributo 8021),
+  IGV con vencimiento prorrogado y declaraciones mensuales. Avisa cuando un
+  fraccionamiento tiene cuotas vencidas, porque con dos consecutivas se pierde
+  (Art. 36). Las declaraciones de hace más de 60 días no entran: son el atraso
+  histórico y se cierran en bloque desde su propia pestaña.
+- **Emitir** — para cuando Javier manda el monto y Martín la glosa. Se elige
+  emisor y receptor, se pone el neto y sale el comprobante entero: IGV o no,
+  detracción con su porcentaje y umbral, retención si es recibo, y cuánto cae
+  al banco. Debajo, las reglas cargadas.
 - **Resumen** — facturado del año, pendiente por facturar, cuánto está trabado
   por falta de RUC, y declaraciones vencidas.
 - **Por facturar** — las comisiones pendientes agrupadas por asesor. Se marcan
@@ -26,7 +36,14 @@ registro, calcula lo que se debe y avisa antes de que venza.
 ## Reglas que respeta
 
 - IGV 18%, pago a cuenta de renta 1% mensual, régimen RMT.
-- Detracción 10%, sólo cuando el total **con IGV** pasa de S/700.
+- La detracción **depende del receptor**, no es una sola: Rena Ware 10% sólo
+  cuando el total con IGV pasa de S/700; Bros Consultores 12% sin umbral.
+  Lo define `fact_reglas_emision` por par emisor-receptor; si no hay regla,
+  se cae al genérico de `fact_config`.
+- Recibo por honorarios: sin IGV, con retención de 8% de cuarta categoría.
+  Es otro mecanismo, no una detracción.
+- Fraccionamiento Art. 36: tributo 8021, se paga con NPS o Form. 1662 citando
+  el número de RI. Dos cuotas consecutivas impagas y se pierde.
 - Cronograma SUNAT por último dígito del RUC (`fact_vencimientos`).
 - La declaración anual sigue siendo obligatoria para quien facturó en el
   ejercicio, aunque hoy esté desactivado o haya suspendido actividades.
@@ -40,8 +57,9 @@ Un solo `index.html`, sin build. React y supabase-js entran por CDN,
 Misma convención que el cotizador.
 
 Backend: Supabase `kiexpdaaoegbtesqmaff`, tablas `eq_personas`,
-`fact_facturas`, `fact_declaraciones`, `fact_vencimientos`, `fact_config`
-y `fact_gastos_anuales`. El acceso es el mismo de la plataforma
+`fact_facturas`, `fact_declaraciones`, `fact_vencimientos`, `fact_config`,
+`fact_gastos_anuales`, `fact_emisores`, `fact_receptores`,
+`fact_reglas_emision`, `fact_obligaciones` y `fact_obligacion_cuotas`. El acceso es el mismo de la plataforma
 (correo y contraseña de `perfiles`); los datos los protege RLS, por eso la
 clave publicable del archivo puede ser pública.
 
@@ -66,7 +84,7 @@ el cotizador. Después de cualquier cambio:
 
 ```bash
 cd pruebas
-node prueba.js    # sintaxis + 28 aserciones de comportamiento en jsdom
+node prueba.js    # sintaxis + 54 aserciones de comportamiento en jsdom
 node ver.js       # render real en Chromium, escritorio y celular
 ```
 
@@ -97,5 +115,9 @@ pantalla de inicio llevan a este módulo.
   deberían decir lo mismo.
 - Decidir si las credenciales de los asesores (portal Rena Ware y Clave SOL)
   se guardan en la base y bajo qué protección.
-- 73 personas sin RUC bloquean S/ 37,575 en comisiones pendientes. Es el
+- 79 personas sin RUC bloquean unos S/ 40,500 en comisiones pendientes. Es el
   cuello de botella real, más que las multas.
+- Anulaciones: `fact_facturas` tiene el estado `anulada` pero nada registra las
+  notas de crédito de anulación. Abril tuvo varias; infla la proyección anual.
+- Universidad de Piura y Grupo Empresarial Viaje están cargados como receptores
+  pero sin reglas: hay que definirles detracción.

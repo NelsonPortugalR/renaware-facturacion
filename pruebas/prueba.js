@@ -1,6 +1,7 @@
 /* Prueba de comportamiento con jsdom.
    Stub de Supabase con datos conocidos: lo que se verifica es la lógica
-   derivada (obligaciones, totales, proyección anual), no la red. */
+   derivada (agenda, cálculo del comprobante, obligaciones, totales,
+   proyección anual), no la red. */
 const fs = require("fs");
 const path = require("path");
 const { JSDOM } = require("/home/claude/node_modules/jsdom");
@@ -12,6 +13,8 @@ const reactDom = fs.readFileSync(NM + "/react-dom/umd/react-dom.production.min.j
 /* ---------------- fixtures ---------------- */
 const HOY = new Date().toISOString().slice(0, 10);
 const ANIO = +HOY.slice(0, 4);
+const dISO = (off) => new Date(Date.now() + off * 864e5).toISOString().slice(0, 10);
+const AYER = dISO(-3), PRONTO = dISO(5);
 
 const personas = [
   // RUC termina en 1 -> grupo "1"
@@ -68,12 +71,60 @@ for (let m = 1; m <= 12; m++) {
   });
 }
 
+/* --- lo propio de Nelson: emisores, receptores, reglas, deudas --- */
+const EMI_PRI = "e-pri", EMI_NAT = "e-nat";
+const REC_RW = "r-rw", REC_BROS = "r-bros", REC_PRI = "r-pri";
+
+const emisores = [
+  { id: EMI_PRI, ruc: "20600022653", nombre: "Portugal Research International",
+    tipo: "empresa", relacion: "propio", persona_id: null, regimen: "RMT",
+    serie_default: "E001", ultimo_correlativo: "E001-560 (19/10/2026)", activo: true,
+    banco: "BCP", cuenta_bancaria: "1", cci: "1", cuenta_detraccion: "00101993892" },
+  { id: EMI_NAT, ruc: "10449906662", nombre: "PORTUGAL ROMAN NELSON",
+    tipo: "persona", relacion: "propio", persona_id: null, regimen: "4ta",
+    serie_default: "E001", ultimo_correlativo: "RxH E001-481", activo: true,
+    banco: null, cuenta_bancaria: null, cci: null, cuenta_detraccion: null }
+];
+const receptores = [
+  { id: REC_RW, ruc: "20100131863", razon_social: "RENA WARE DEL PERU S.A.", activo: true },
+  { id: REC_BROS, ruc: "20611129875", razon_social: "BROS CONSULTORES S.A.C.", activo: true },
+  { id: REC_PRI, ruc: "20600022653", razon_social: "PORTUGAL RESEARCH INTERNATIONAL S.A.C.",
+    activo: true }
+];
+const reglas = [
+  { emisor_id: EMI_PRI, receptor_id: REC_RW, tipo_comprobante: "factura", lleva_igv: true,
+    detraccion_pct: 0.10, detraccion_umbral: 700, codigo_bien: "037", retencion_pct: null,
+    glosa_plantilla: "PB XX/26 servicio fijo" },
+  { emisor_id: EMI_PRI, receptor_id: REC_BROS, tipo_comprobante: "factura", lleva_igv: true,
+    detraccion_pct: 0.12, detraccion_umbral: null, codigo_bien: "037", retencion_pct: null,
+    glosa_plantilla: "FACILITADOR PEPSICO" },
+  { emisor_id: EMI_NAT, receptor_id: REC_PRI, tipo_comprobante: "rxh", lleva_igv: false,
+    detraccion_pct: null, detraccion_umbral: null, codigo_bien: null, retencion_pct: 0.08,
+    glosa_plantilla: "Servicio de gerenciamiento empresarial" }
+];
+const obligaciones = [
+  { id: "o1", emisor_id: EMI_PRI, tipo: "fraccionamiento", referencia: "RI 0230174741237",
+    descripcion: "Art. 36", monto_total: 2577, cuotas: 9 },
+  { id: "o2", emisor_id: EMI_PRI, tipo: "deuda_igv", referencia: "junio 2026",
+    descripcion: "IGV prorrogado", monto_total: 1931, cuotas: 1 }
+];
+const cuotas = [
+  { obligacion_id: "o1", numero: 1, vence: AYER,   monto: 302,  pagada_en: null },
+  { obligacion_id: "o1", numero: 2, vence: PRONTO, monto: 297,  pagada_en: null },
+  { obligacion_id: "o2", numero: 1, vence: AYER,   monto: 1931, pagada_en: null }
+];
+
 const TABLAS = {
   eq_personas: personas,
   fact_facturas: facturas,
   fact_declaraciones: [],
   fact_vencimientos: venc,
   fact_gastos_anuales: [],
+  fact_emisores: emisores,
+  fact_receptores: receptores,
+  fact_reglas_emision: reglas,
+  fact_obligaciones: obligaciones,
+  fact_obligacion_cuotas: cuotas,
   fact_config: { id: "vigente", igv: 0.18, detraccion: 0.10,
     detraccion_umbral: 700, renta: 0.01, uit: 5500 }
 };
@@ -82,8 +133,7 @@ const TABLAS = {
 function stubSupabase() {
   function consulta(tabla) {
     const api = {};
-    const res = () => Promise.resolve({
-      data: tabla === "fact_config" ? TABLAS[tabla] : TABLAS[tabla], error: null });
+    const res = () => Promise.resolve({ data: TABLAS[tabla], error: null });
     ["select","order","eq","in","update","upsert"].forEach(m => {
       api[m] = () => api;
     });
@@ -123,6 +173,7 @@ let html = fs.readFileSync(path.join(RAIZ, "index.html"), "utf8");
   }
   console.log("sintaxis: OK (" + inline.length + " bytes)");
 }
+
 /* Ojo: hay que reemplazar con función, no con string. El fuente de React
    contiene "$$typeof" y String.replace interpreta "$$" como un "$" literal,
    lo que corrompe el bundle. */
@@ -156,20 +207,62 @@ setTimeout(async () => {
   /* --- carga y sesión --- */
   ok("entra con sesión activa (no muestra login)", !/Contraseña/.test(T));
   ok("muestra el correo de la sesión", /prueba@equipo\.pe/.test(T));
-  ok("renderiza las 5 pestañas",
-    ["Resumen","Por facturar","Declaraciones","Padrón","Anual"]
+  ok("renderiza las 7 pestañas",
+    ["Agenda","Por facturar","Emitir","Declaraciones","Padrón","Anual","Resumen"]
       .every(t => T.indexOf(t) >= 0));
 
-  /* --- resumen: totales ---
-     emitidas: 1000 y 500 (p1) + 800 (p3) = 2300 neto -> total 2714
-     borradores: 200 (p1) + 300 (p2) = 500 neto -> total 590
-     trabado sin ruc: 300 neto -> 354 */
-  ok("facturado = S/ 2,714", T.indexOf("S/ 2,714") >= 0);
-  ok("pendiente = S/ 590", T.indexOf("S/ 590") >= 0);
-  ok("trabado sin RUC = S/ 354", T.indexOf("S/ 354") >= 0);
-  ok("cuenta 1 persona sin RUC", /1 personas|1 persona/.test(T));
+  /* --- agenda: arranca acá, es la pantalla de cero multas --- */
+  ok("arranca en la agenda", /Vencido/.test(T));
+  ok("muestra la cuota de fraccionamiento", /Cuota 1 de 9/.test(T));
+  ok("cita el número de RI", /RI 0230174741237/.test(T));
+  ok("muestra el IGV prorrogado", /IGV junio 2026/.test(T));
+  ok("pone el código de tributo del fraccionamiento", /tributo 8021/.test(T));
+  /* vencido = 302 + 1931 = 2,233 */
+  ok("suma lo vencido", T.indexOf("S/ 2,233") >= 0);
+  ok("avisa del riesgo de perder el fraccionamiento",
+    /se pierde el fraccionamiento/.test(T));
+  ok("ofrece marcar la cuota como pagada", /marcar pagada/.test(T));
+  ok("la cuota que vence pronto entra en esta semana", /Esta semana/.test(T));
 
-  /* --- por facturar --- */
+  /* --- cálculo del comprobante: la aritmética que debe cuadrar al céntimo --- */
+  const calcular = dom.window.calcular;
+  const reglaDe = dom.window.reglaDe;
+  const cfg = TABLAS.fact_config;
+  ok("expone calcular() y reglaDe()",
+    typeof calcular === "function" && typeof reglaDe === "function");
+
+  if (typeof calcular === "function") {
+    const rBros = reglaDe(reglas, EMI_PRI, REC_BROS);
+    const bros = calcular(rBros, 3000, cfg);
+    /* contra la factura real E001-560 */
+    ok("Bros: total 3,540", bros.total === 3540, "dio " + bros.total);
+    ok("Bros: detracción 12% sin umbral = 424.80", bros.detraccion === 424.8,
+      "dio " + bros.detraccion);
+    ok("Bros: al banco 3,115.20", bros.banco === 3115.2, "dio " + bros.banco);
+
+    const rRW = reglaDe(reglas, EMI_PRI, REC_RW);
+    const chico = calcular(rRW, 500, cfg);
+    ok("Rena Ware: total 590 no llega al umbral, sin detracción",
+      chico.total === 590 && chico.detraccion === 0,
+      "total " + chico.total + " detr " + chico.detraccion);
+    const grande = calcular(rRW, 1000, cfg);
+    ok("Rena Ware: total 1,180 pasa el umbral, detracción 118",
+      grande.total === 1180 && grande.detraccion === 118,
+      "detr " + grande.detraccion);
+
+    const rRxh = reglaDe(reglas, EMI_NAT, REC_PRI);
+    const rxh = calcular(rRxh, 1000, cfg);
+    ok("RxH: no lleva IGV", rxh.igv === 0 && rxh.total === 1000);
+    ok("RxH: retención 8% = 80", rxh.retencion === 80, "dio " + rxh.retencion);
+    ok("RxH: no lleva detracción", rxh.detraccion === 0);
+    ok("RxH: al banco 920", rxh.banco === 920, "dio " + rxh.banco);
+
+    /* sin regla cargada cae al genérico y no revienta */
+    const gen = calcular(null, 1000, cfg);
+    ok("sin regla usa lo genérico (IGV 18%, detracción 10% sobre 700)",
+      gen.total === 1180 && gen.detraccion === 118);
+  }
+
   const irA = async (nombre) => {
     const tabs = [...doc.querySelectorAll("button.tab")];
     const b = tabs.find(x => x.textContent.indexOf(nombre) === 0);
@@ -177,6 +270,29 @@ setTimeout(async () => {
     b.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
     await pausa(60);   // React 18 agrupa y recién pinta en el microtask
   };
+
+  /* --- emitir --- */
+  await irA("Emitir");
+  const TE = txt();
+  ok("emitir lista los emisores propios", /Portugal Research International/.test(TE));
+  ok("emitir muestra el último correlativo", /E001-560/.test(TE));
+  ok("emitir muestra la tabla de reglas", /Reglas cargadas/.test(TE));
+  ok("emitir muestra la detracción de Bros al 12%", /12% siempre/.test(TE));
+  ok("emitir muestra el umbral de Rena Ware", /10% > 700/.test(TE));
+  ok("emitir muestra la retención del recibo", /8%/.test(TE));
+
+  /* --- resumen: totales ---
+     emitidas: 1000 y 500 (p1) + 800 (p3) = 2300 neto -> total 2714
+     borradores: 200 (p1) + 300 (p2) = 500 neto -> total 590
+     trabado sin ruc: 300 neto -> 354 */
+  await irA("Resumen");
+  const TR = txt();
+  ok("facturado = S/ 2,714", TR.indexOf("S/ 2,714") >= 0);
+  ok("pendiente = S/ 590", TR.indexOf("S/ 590") >= 0);
+  ok("trabado sin RUC = S/ 354", TR.indexOf("S/ 354") >= 0);
+  ok("cuenta 1 persona sin RUC", /1 personas|1 persona/.test(TR));
+
+  /* --- por facturar --- */
   await irA("Por facturar");
   const T2 = txt();
   ok("lista a la persona sin RUC como bloqueada", /sin RUC/.test(T2));
