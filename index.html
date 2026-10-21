@@ -66,6 +66,30 @@ table.matriz{width:auto}
 <body>
 <div id="raiz"></div>
 
+<script>
+/* Traspaso desde la plataforma: si el enlace trae #traspaso=<código>, se canjea por la sesión
+   propia de este módulo y se arranca ya con sesión. Si no trae nada, no pasa nada. */
+(function () {
+  var m = (location.hash || '').match(/[#&]traspaso=([0-9a-f-]{36})/i);
+  if (!m) return;
+  var codigo = m[1];
+  var resto = location.hash.slice(1).split('&').filter(function (p) { return p && !/^traspaso=/i.test(p); }).join('&');
+  history.replaceState(null, '', location.pathname + location.search + (resto ? '#' + resto : ''));
+  var raiz = document.documentElement, visAntes = raiz.style.visibility;
+  raiz.style.visibility = 'hidden';
+  function guardar(k, v) { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
+  fetch('https://kiexpdaaoegbtesqmaff.supabase.co/functions/v1/traspaso', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': 'sb_publishable_pftOAOUR51_Q5gq-Qqra-g_cc0rzhth' },
+    body: JSON.stringify({ codigo: codigo })
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    if (!d || !d.ok) throw new Error((d && d.motivo) || 'Enlace inválido');
+    if (!d.sesion) throw new Error('Sin credencial para este módulo');
+    guardar('sb-kiexpdaaoegbtesqmaff-auth-token', JSON.stringify(d.sesion));
+    location.replace(location.pathname + location.search + location.hash);
+  }).catch(function () { raiz.style.visibility = visAntes; });
+})();
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js" crossorigin></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js" crossorigin></script>
