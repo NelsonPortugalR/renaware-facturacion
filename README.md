@@ -11,10 +11,16 @@ registro, calcula lo que se debe y avisa antes de que venza.
 
 - **Agenda** — la pantalla de cero multas. Todo lo que tiene fecha en una sola
   lista ordenada por vencimiento: cuotas de fraccionamiento (tributo 8021),
-  IGV con vencimiento prorrogado y declaraciones mensuales. Avisa cuando un
-  fraccionamiento tiene cuotas vencidas, porque con dos consecutivas se pierde
-  (Art. 36). Las declaraciones de hace más de 60 días no entran: son el atraso
-  histórico y se cierran en bloque desde su propia pestaña.
+  IGV con vencimiento prorrogado y declaraciones mensuales. Arranca filtrada
+  en **Lo mío** y no es un detalle: las declaraciones del equipo son más de
+  cien y tapaban por completo las dos deudas propias. "Mío" es lo que emiten
+  los RUC con `relacion = 'propio'`. Las declaraciones de hace más de 60 días
+  no entran: son el atraso histórico y se cierran en bloque desde su pestaña.
+- **Mis deudas** — cada fraccionamiento y cada IGV prorrogado con su
+  cronograma entero: qué cuota se pagó y cuándo, cuál está vencida, cuánto
+  falta. Se marca pagada (y se deshace) desde ahí. El aviso del Art. 36 sale
+  sólo en fraccionamientos; una deuda de IGV vencida no se pierde, acumula
+  interés moratorio.
 - **Emitir** — para cuando Javier manda el monto y Martín la glosa. Se elige
   emisor y receptor, se pone el neto y sale el comprobante entero: IGV o no,
   detracción con su porcentaje y umbral, retención si es recibo, y cuánto cae
@@ -84,7 +90,7 @@ el cotizador. Después de cualquier cambio:
 
 ```bash
 cd pruebas
-node prueba.js    # sintaxis + 54 aserciones de comportamiento en jsdom
+node prueba.js    # sintaxis + 72 aserciones de comportamiento en jsdom
 node ver.js       # render real en Chromium, escritorio y celular
 ```
 

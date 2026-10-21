@@ -224,6 +224,28 @@ setTimeout(async () => {
   ok("ofrece marcar la cuota como pagada", /marcar pagada/.test(T));
   ok("la cuota que vence pronto entra en esta semana", /Esta semana/.test(T));
 
+  /* --- la agenda arranca en lo propio: las declaraciones del equipo no
+         pueden tapar las deudas de Nelson (eran 108 contra 2) --- */
+  ok("ofrece los tres ámbitos", /Lo mío/.test(T) && /Del equipo/.test(T) && /Todo/.test(T));
+  ok("arranca en lo propio, sin declaraciones de asesores",
+    !/Declarar/.test(T), "se coló una declaración del equipo");
+  ok("en lo propio quedan las tres deudas", /Cuota 1 de 9/.test(T) &&
+    /Cuota 2 de 9/.test(T) && /IGV junio 2026/.test(T));
+
+  const chip = async (nombre) => {
+    const b = [...doc.querySelectorAll("button.chip")]
+      .find(x => x.textContent.indexOf(nombre) === 0);
+    if (!b) throw new Error("no encontré el filtro " + nombre);
+    b.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await pausa(60);
+  };
+  await chip("Del equipo");
+  const TQ = txt();
+  ok("el ámbito del equipo sí trae las declaraciones", /Declarar/.test(TQ));
+  ok("y explica por qué figuran pendientes", /nunca se registraron/.test(TQ));
+  ok("el ámbito del equipo no repite las deudas propias", !/Cuota 1 de 9/.test(TQ));
+  await chip("Lo mío");
+
   /* --- cálculo del comprobante: la aritmética que debe cuadrar al céntimo --- */
   const calcular = dom.window.calcular;
   const reglaDe = dom.window.reglaDe;
@@ -270,6 +292,27 @@ setTimeout(async () => {
     b.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
     await pausa(60);   // React 18 agrupa y recién pinta en el microtask
   };
+
+  /* --- mis deudas: el cronograma entero, pagado y no pagado --- */
+  await irA("Mis deudas");
+  const TD = txt();
+  ok("deudas: saldo total 2,530", TD.indexOf("S/ 2,530") >= 0);
+  ok("deudas: vencido sin pagar 2,233", TD.indexOf("S/ 2,233") >= 0);
+  ok("deudas: lista las dos obligaciones",
+    /Fraccionamiento/.test(TD) && /IGV junio 2026/.test(TD));
+  ok("deudas: muestra el cronograma completo", /1 \/ 9/.test(TD) && /2 \/ 9/.test(TD));
+  ok("deudas: cita el RI", /RI 0230174741237/.test(TD));
+  ok("deudas: marca cuál está vencida", /vencida/.test(TD));
+  ok("deudas: marca cuál está pendiente", /pendiente/.test(TD));
+  ok("deudas: avisa del Art. 36", /Art\. 36/.test(TD));
+  /* el Art. 36 es de fraccionamientos: una deuda de IGV no puede llevarlo */
+  ok("deudas: el IGV vencido no habla de perder el fraccionamiento",
+    (TD.match(/Art\. 36/g) || []).length === 1, "aparece más de una vez");
+  ok("deudas: el IGV vencido habla de interés moratorio",
+    /interés moratorio/.test(TD));
+  ok("deudas: dice cómo se paga", /Formulario 1662/.test(TD) && /8021/.test(TD));
+  ok("deudas: deja marcar una cuota como pagada",
+    [...doc.querySelectorAll("button.btn.sec.sm")].some(b => b.textContent === "pagada"));
 
   /* --- emitir --- */
   await irA("Emitir");
