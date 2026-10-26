@@ -207,8 +207,8 @@ setTimeout(async () => {
   /* --- carga y sesión --- */
   ok("entra con sesión activa (no muestra login)", !/Contraseña/.test(T));
   ok("muestra el correo de la sesión", /prueba@equipo\.pe/.test(T));
-  ok("renderiza las 7 pestañas",
-    ["Agenda","Por facturar","Emitir","Declaraciones","Padrón","Anual","Resumen"]
+  ok("renderiza las 8 pestañas",
+    ["Agenda","Deuda","Por facturar","Emitir","Declaraciones","Padrón","Anual","Resumen"]
       .every(t => T.indexOf(t) >= 0));
 
   /* --- agenda: arranca acá, es la pantalla de cero multas --- */
@@ -293,9 +293,10 @@ setTimeout(async () => {
     await pausa(60);   // React 18 agrupa y recién pinta en el microtask
   };
 
-  /* --- mis deudas: el cronograma entero, pagado y no pagado --- */
-  await irA("Mis deudas");
+  /* --- deuda: el cronograma entero, pagado y no pagado --- */
+  await irA("Deuda");
   const TD = txt();
+  ok("deuda arranca en lo mío", /Mías/.test(TD) && /Del equipo/.test(TD));
   ok("deudas: saldo total 2,530", TD.indexOf("S/ 2,530") >= 0);
   ok("deudas: vencido sin pagar 2,233", TD.indexOf("S/ 2,233") >= 0);
   ok("deudas: lista las dos obligaciones",
@@ -314,15 +315,31 @@ setTimeout(async () => {
   ok("deudas: deja marcar una cuota como pagada",
     [...doc.querySelectorAll("button.btn.sec.sm")].some(b => b.textContent === "pagada"));
 
-  /* --- emitir --- */
+  /* --- emitir: ya no calcula, administra las reglas --- */
   await irA("Emitir");
   const TE = txt();
-  ok("emitir lista los emisores propios", /Portugal Research International/.test(TE));
-  ok("emitir muestra el último correlativo", /E001-560/.test(TE));
-  ok("emitir muestra la tabla de reglas", /Reglas cargadas/.test(TE));
+  ok("emitir ya no trae la calculadora",
+    !/Cae al banco/.test(TE) && !/Neto \(sin IGV\)/.test(TE));
+  ok("emitir separa mías del equipo", /Mías/.test(TE) && /Del equipo/.test(TE));
+  ok("emitir lista las reglas propias", /Portugal Research International/.test(TE));
   ok("emitir muestra la detracción de Bros al 12%", /12% siempre/.test(TE));
   ok("emitir muestra el umbral de Rena Ware", /10% > 700/.test(TE));
   ok("emitir muestra la retención del recibo", /8%/.test(TE));
+  ok("emitir ofrece cargar una regla nueva", /cargar nueva regla/.test(TE));
+  {
+    const b = [...doc.querySelectorAll("button.btn.sec")]
+      .find(x => x.textContent === "cargar nueva regla");
+    b.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await pausa(60);
+    const TF = txt();
+    ok("el formulario pide emisor y receptor", /Emisor/.test(TF) && /Receptor/.test(TF));
+    ok("el formulario pide la detracción", /Detracción %/.test(TF));
+    /* el umbral recién aparece cuando hay un % de detracción: hasta entonces
+       no tiene sentido preguntarlo */
+    ok("el umbral no se pregunta sin detracción", !/sin importar el monto/.test(TF));
+    ok("el formulario ofrece el recibo por honorarios",
+      /Recibo por honorarios/.test(TF));
+  }
 
   /* --- resumen: totales ---
      emitidas: 1000 y 500 (p1) + 800 (p3) = 2300 neto -> total 2714
@@ -335,21 +352,28 @@ setTimeout(async () => {
   ok("trabado sin RUC = S/ 354", TR.indexOf("S/ 354") >= 0);
   ok("cuenta 1 persona sin RUC", /1 personas|1 persona/.test(TR));
 
-  /* --- por facturar --- */
+  /* --- por facturar: separa lo accionable de lo trabado --- */
   await irA("Por facturar");
   const T2 = txt();
-  ok("lista a la persona sin RUC como bloqueada", /sin RUC/.test(T2));
-  ok("muestra ambas comisiones pendientes",
-    /ANA PRUEBA UNO/.test(T2) && /BEA PRUEBA DOS/.test(T2));
+  ok("ofrece con RUC / sin RUC", /Con RUC/.test(T2) && /Sin RUC/.test(T2));
+  ok("avisa que falta la fecha del reporte de Aurora",
+    /último reporte de Aurora/.test(T2));
+  ok("arranca en los que sí se pueden facturar",
+    /ANA PRUEBA UNO/.test(T2) && !/BEA PRUEBA DOS/.test(T2));
   const checks = [...doc.querySelectorAll('input[type=checkbox]')];
-  ok("hay 2 casillas", checks.length === 2, "hay " + checks.length);
-  ok("la casilla de quien no tiene RUC está deshabilitada",
-    checks.some(c => c.disabled), "ninguna deshabilitada");
-  ok("la casilla de quien sí tiene RUC está habilitada",
-    checks.some(c => !c.disabled));
+  ok("hay 1 casilla, la de quien tiene RUC", checks.length === 1, "hay " + checks.length);
+  ok("esa casilla está habilitada", checks.some(c => !c.disabled));
+  await chip("Sin RUC");
+  const T2b = txt();
+  ok("sin RUC muestra a quien falta el dato", /BEA PRUEBA DOS/.test(T2b));
+  ok("sin RUC dice cuánto está trabado y dónde se arregla",
+    /trabados por falta de dato/.test(T2b) && /Padrón/.test(T2b));
+  await chip("Con RUC");
 
   /* --- declaraciones --- */
   await irA("Declaraciones");
+  ok("declaraciones separa mías del equipo", /Mías/.test(txt()));
+  await chip("Todas");
   const T3 = txt();
   ok("arma la matriz del año", /grupo 1/.test(T3) || /grupo 9/.test(T3));
   ok("incluye a quien tiene RUC", /ANA PRUEBA UNO/.test(T3));

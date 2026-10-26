@@ -186,6 +186,17 @@ function Modal(p){
   return h("div",{className:"ov", onClick:p.onClose},
     h("div",{className:"modal", onClick:function(e){ e.stopPropagation(); }}, p.children));
 }
+/* Mio / equipo: el mismo filtro en todas las pestanas. "Mio" son los RUC
+   propios de Nelson (Portugal Research, su RUC 10, su esposa, su suegro);
+   el resto es el equipo. */
+function Ambito(p){
+  return h("div",{className:"row",style:{gap:8,marginBottom:16}},
+    p.opciones.map(function(c){
+      return h("button",{key:c[0],className:"chip"+(p.valor===c[0]?" on":""),
+        onClick:function(){ p.set(c[0]); }},
+        c[1], c[2] != null ? h("span",{style:{marginLeft:6,opacity:.6}}, c[2]) : null);
+    }));
+}
 function Vacio(p){
   return h("div",{style:{padding:"56px 16px",textAlign:"center",color:"var(--ink70)"}},
     h("div",{style:{fontSize:14}}, p.children),
@@ -368,15 +379,18 @@ function App(props){
      declaraciones, de las facturas emitidas. Las declaraciones muy viejas
      (mas de 60 dias) no entran: son el atraso historico, se cierran en bloque
      desde la pestana Declaraciones. */
+  /* "Mio" = lo que emiten los RUC propios de Nelson. Lo demas es del equipo.
+     Sale de fact_emisores.relacion, no de una lista en el codigo. */
+  var esMio = useMemo(function(){
+    var s = {};
+    emisores.forEach(function(e){
+      if(e.relacion === "propio" && e.ruc) s[e.ruc] = true;
+    });
+    return function(ruc){ return !!(ruc && s[ruc]); };
+  },[emisores]);
+
   var agenda = useMemo(function(){
     var em = {}; emisores.forEach(function(e){ em[e.id] = e; });
-    /* "Mio" = lo que emite Nelson con sus propios RUC (Portugal Research y su
-       RUC 10). Lo demas son las declaraciones de los asesores, que son muchas
-       y tapaban lo suyo. */
-    var rucsMios = {};
-    emisores.forEach(function(e){
-      if(e.relacion === "propio" && e.ruc) rucsMios[e.ruc] = true;
-    });
     var ob = {}; obligs.forEach(function(o){ ob[o.id] = o; });
     var out = [];
     cuotas.forEach(function(c){
@@ -400,7 +414,7 @@ function App(props){
       if(!o.vence || o.vence < corte) return;
       out.push({
         k:"d|"+o.pid+"|"+o.anio+"|"+o.mes, clase:"declaracion",
-        mio: !!rucsMios[o.p.ruc],
+        mio: esMio(o.p.ruc),
         quien:o.p.nombre, ruc:o.p.ruc,
         que: "Declarar " + etiqMes(o.anio,o.mes) + " \u00b7 " +
              (o.facturas ? plural(o.facturas,"factura","facturas") : "sin facturas"),
@@ -413,7 +427,7 @@ function App(props){
       return x < y ? -1 : (x > y ? 1 : 0);
     });
     return out;
-  },[emisores,obligs,cuotas,obPend]);
+  },[emisores,obligs,cuotas,obPend,esMio]);
 
   /* Art. 36: con dos cuotas consecutivas impagas se pierde el fraccionamiento. */
   var riesgo = useMemo(function(){
@@ -517,6 +531,15 @@ function App(props){
       return true;
     });
   }
+  function guardarRegla(fila){
+    return db.from("fact_reglas_emision").insert(fila).select()
+      .then(function(r){
+        if(r.error){ avisar("No se pudo guardar la regla: " + r.error.message); return false; }
+        setReglas(function(prev){ return prev.concat(r.data); });
+        avisar("Regla guardada.");
+        return true;
+      });
+  }
   function guardarGasto(pid, anio, monto){
     return db.from("fact_gastos_anuales").upsert({
       persona_id:pid, anio:anio, gastos:Number(monto)||0,
@@ -550,7 +573,7 @@ function App(props){
     return !c.pagada_en && dias(c.vence) < 0; }).length;
   var TABS = [
     ["agenda","Agenda",atrasados,"var(--alerta)"],
-    ["deudas","Mis deudas",deudasVencidas,"var(--alerta)"],
+    ["deudas","Deuda",deudasVencidas,"var(--alerta)"],
     ["facturar","Por facturar",borradores.length,"var(--detra)"],
     ["emitir","Emitir",0,null],
     ["declaraciones","Declaraciones",obPend.length,
@@ -589,16 +612,16 @@ function App(props){
       vista==="agenda" ? h(Agenda,{agenda:agenda,riesgo:riesgo,
         marcarCuota:marcarCuota,ir:setVista}) : null,
       vista==="deudas" ? h(Deudas,{obligs:obligs,cuotas:cuotas,emisores:emisores,
-        marcarCuota:marcarCuota}) : null,
+        esMio:esMio,marcarCuota:marcarCuota}) : null,
       vista==="emitir" ? h(Emitir,{emisores:emisores,receptores:receptores,
-        reglas:reglas,cfg:cfg}) : null,
+        reglas:reglas,cfg:cfg,guardarRegla:guardarRegla}) : null,
       vista==="resumen" ? h(Resumen,{personas:personas,emitidas:emitidas,
         borradores:borradores,totFact:totFact,totPend:totPend,sinRuc:sinRuc,
         oblig:oblig,obPend:obPend,vencidas:vencidas,ir:setVista}) : null,
       vista==="facturar" ? h(PorFacturar,{borradores:borradores,emitidas:emitidas,
-        P:P,cfg:cfg,marcar:marcarFacturadas,desmarcar:desmarcar}) : null,
-      vista==="declaraciones" ? h(Declaraciones,{oblig:oblig,guardar:guardarDecl,
-        guardarVarias:guardarVarias,avisar:avisar}) : null,
+        P:P,cfg:cfg,esMio:esMio,marcar:marcarFacturadas,desmarcar:desmarcar}) : null,
+      vista==="declaraciones" ? h(Declaraciones,{oblig:oblig,esMio:esMio,
+        guardar:guardarDecl,guardarVarias:guardarVarias,avisar:avisar}) : null,
       vista==="padron" ? h(Padron,{personas:personas,facturas:facturas,
         guardar:guardarPersona}) : null,
       vista==="anual" ? h(Anual,{personas:personas,emitidas:emitidas,oblig:oblig,
@@ -681,8 +704,9 @@ function PorFacturar(p){
   var s2 = useState(""), q = s2[0], setQ = s2[1];
   var s3 = useState(false), modal = s3[0], setModal = s3[1];
   var s4 = useState(false), verHechas = s4[0], setVerHechas = s4[1];
+  var s5 = useState("con"), filtro = s5[0], setFiltro = s5[1];
 
-  var grupos = useMemo(function(){
+  var todosGrupos = useMemo(function(){
     var g = {};
     p.borradores.forEach(function(f){
       var per = p.P[f.persona_id];
@@ -695,6 +719,16 @@ function PorFacturar(p){
       return sb - sa;
     });
   },[p.borradores,p.P,q]);
+
+  /* Quien no tiene RUC no puede facturar: es un trabajo distinto (conseguir
+     el dato) y por eso va en su propia lista, no mezclado con lo accionable. */
+  var conRuc = todosGrupos.filter(function(g){ return !!(g.per && g.per.ruc); });
+  var sinRuc = todosGrupos.filter(function(g){ return !(g.per && g.per.ruc); });
+  var grupos = filtro === "con" ? conRuc : (filtro === "sin" ? sinRuc : todosGrupos);
+  var sumaDe = function(gs){
+    return r2(gs.reduce(function(s,g){
+      return s + g.fs.reduce(function(a,f){ return a+Number(f.total); },0); },0));
+  };
 
   var elegidas = Object.keys(sel).filter(function(k){ return sel[k]; });
   var montoSel = r2(p.borradores.filter(function(f){ return sel[f.id]; })
@@ -722,15 +756,34 @@ function PorFacturar(p){
     return null;
   }
 
+  var corte = p.cfg && p.cfg.aurora_hasta;
   return h("div",null,
-    h("div",{className:"row",style:{justifyContent:"space-between",marginBottom:14}},
+    h("div",{className:"row",style:{justifyContent:"space-between",marginBottom:10}},
       h("input",{className:"in",style:{maxWidth:260},placeholder:"buscar nombre, RUC o código…",
         value:q,onChange:function(e){ setQ(e.target.value); }}),
       h("button",{className:"lk",onClick:function(){ setVerHechas(!verHechas); }},
         verHechas ? "ver pendientes" : "ver ya facturadas")),
 
+    h("div",{className:"hint",style:{marginBottom:14}},
+      corte
+        ? ("Actualizado con el reporte de Aurora del " + fechaCorta(corte) +
+           ". Lo posterior a esa fecha todavía no está acá.")
+        : "Falta registrar de cuándo es el último reporte de Aurora: sin eso no se sabe hasta dónde llega esta lista."),
+
     verHechas ? h(YaFacturadas,{emitidas:p.emitidas,P:p.P,q:q,desmarcar:p.desmarcar}) :
+    h("div",null,
+    h(Ambito,{valor:filtro, set:setFiltro, opciones:[
+      ["con","Con RUC",conRuc.length],
+      ["sin","Sin RUC",sinRuc.length],
+      ["todos","Todos",todosGrupos.length]]}),
+
+    filtro === "sin" ? h("div",{className:"hint",style:{marginBottom:14,
+        lineHeight:1.7,maxWidth:640}},
+      "Estos no se pueden facturar hasta tener RUC. Son " + miles(sumaDe(sinRuc)) +
+      " trabados por falta de dato, no por falta de gestión. El RUC se carga en Padrón.") : null,
+
     (!grupos.length ? h(Vacio,{nota:"Cuando llegue el próximo reporte FPD se cargan aquí."},
+      filtro === "sin" ? "Todos tienen RUC." :
       "No hay comisiones pendientes de facturar.") :
     h("div",null,
       grupos.map(function(g){
@@ -773,7 +826,7 @@ function PorFacturar(p){
           h("div",{className:"mono",style:{fontSize:12}},
             elegidas.length+" seleccionadas · "+money(montoSel)),
           h("button",{className:"btn",onClick:function(){ setModal(true); }},
-            "Marcar como facturadas"))) : null)),
+            "Marcar como facturadas"))) : null))),
 
     modal ? h(ModalFacturar,{n:elegidas.length,onCerrar:function(){ setModal(false); },
       onOk:function(fecha,serie,numero){
@@ -837,14 +890,26 @@ function YaFacturadas(p){
 
 /* ---------------------------------------------------------------- declaraciones */
 function Declaraciones(p){
+  var sAmb = useState("mio"), amb = sAmb[0], setAmb = sAmb[1];
+  var nMias = p.oblig.filter(function(o){ return p.esMio(o.p.ruc); }).length;
+  var ambChips = h(Ambito,{valor:amb, set:setAmb, opciones:[
+    ["mio","Mías",nMias], ["equipo","Del equipo",p.oblig.length-nMias],
+    ["todas","Todas",p.oblig.length]]});
+  p = Object.assign({}, p, {oblig: p.oblig.filter(function(o){
+    if(amb === "mio") return p.esMio(o.p.ruc);
+    if(amb === "equipo") return !p.esMio(o.p.ruc);
+    return true;
+  })});
   var hoy = mesDe(hoyISO());
   var prev = hoy.mes === 1 ? {anio:hoy.anio-1, mes:12} : {anio:hoy.anio, mes:hoy.mes-1};
   var s1 = useState("matriz"), modo = s1[0], setModo = s1[1];
   var s2 = useState(claveMes(prev.anio, prev.mes)), per = s2[0], setPer = s2[1];
   var s3 = useState(""), q = s3[0], setQ = s3[1];
 
-  if(!p.oblig.length) return h(Vacio,{nota:"Nacen cuando un asesor con RUC "+
-    "tiene su primera factura emitida."},"Todavía no hay obligaciones mensuales.");
+  if(!p.oblig.length) return h("div",null, ambChips,
+    h(Vacio,{nota:"Nacen cuando un asesor con RUC tiene su primera factura emitida."},
+      amb === "mio" ? "No tienes declaraciones propias." :
+      "Todavía no hay obligaciones mensuales."));
 
   var meses = {};
   p.oblig.forEach(function(o){ meses[claveMes(o.anio,o.mes)] = 1; });
@@ -861,6 +926,7 @@ function Declaraciones(p){
   var enCurso = delMes.length && !delMes[0].vigente;
 
   return h("div",null,
+    ambChips,
     h("div",{className:"row",style:{justifyContent:"space-between",marginBottom:14}},
       h("div",{className:"row"},
         h("button",{className:"chip"+(modo==="matriz"?" on":""),
@@ -1473,6 +1539,9 @@ function reglaDe(reglas, eid, rid){
   }
   return null;
 }
+/* Sigue acá aunque la pantalla de Emitir ya no calcule: es la aritmética
+   de detracción y retención, fijada en las pruebas contra la E001-560, y
+   es la que va a validar el IGV declarado mes a mes. */
 function calcular(regla, neto, cfg){
   var n = r2(neto);
   var igvPct = (regla && regla.lleva_igv === false) ? 0 : (cfg ? Number(cfg.igv) : 0.18);
@@ -1491,191 +1560,181 @@ function calcular(regla, neto, cfg){
           renta: r2(n * (cfg ? Number(cfg.renta) : 0.01))};
 }
 
-function Copiar(p){
-  var s1 = useState(false), hecho = s1[0], setHecho = s1[1];
-  function dale(){
-    try{
-      navigator.clipboard.writeText(String(p.texto)).then(function(){
-        setHecho(true); setTimeout(function(){ setHecho(false); }, 1600);
-      }, function(){});
-    }catch(e){}
-  }
-  return h("button",{className:"lk",onClick:dale,title:"copiar"},
-    hecho ? "copiado" : (p.rotulo || "copiar"));
-}
-
 function Emitir(p){
-  var propios = useMemo(function(){
-    return p.emisores.filter(function(e){
-      return e.activo && (e.relacion === "propio" || e.relacion === "externo");
-    });
+  var s1 = useState(false), abierta = s1[0], setAbierta = s1[1];
+  var VACIA = {emisor_id:"", receptor_id:"", tipo_comprobante:"factura",
+    lleva_igv:true, detraccion_pct:"", detraccion_umbral:"", codigo_bien:"037",
+    retencion_pct:"", glosa_plantilla:"", notas:""};
+  var s2 = useState(VACIA), fm = s2[0], setFm = s2[1];
+  var s3 = useState(""), err = s3[0], setErr = s3[1];
+  var s4 = useState(false), yendo = s4[0], setYendo = s4[1];
+  var s5 = useState("mio"), amb = s5[0], setAmb = s5[1];
+
+  var EM = useMemo(function(){
+    var m = {}; p.emisores.forEach(function(e){ m[e.id] = e; }); return m;
   },[p.emisores]);
+  var RE = useMemo(function(){
+    var m = {}; p.receptores.forEach(function(r){ m[r.id] = r; }); return m;
+  },[p.receptores]);
 
-  var s1 = useState(""), eid = s1[0], setEid = s1[1];
-  var s2 = useState(""), rid = s2[0], setRid = s2[1];
-  var s3 = useState(""), neto = s3[0], setNeto = s3[1];
-  var s4 = useState(""), glosa = s4[0], setGlosa = s4[1];
+  function esMia(g){
+    var e = EM[g.emisor_id];
+    return !!e && e.relacion !== "asesor";
+  }
+  var nMias = p.reglas.filter(esMia).length;
 
-  useEffect(function(){
-    if(!eid && propios.length){
-      var pri = propios.filter(function(e){ return e.tipo==="empresa"; })[0] || propios[0];
-      setEid(pri.id);
-    }
-  },[propios, eid]);
+  var filas = useMemo(function(){
+    return p.reglas.filter(function(g){
+      if(amb === "mio") return esMia(g);
+      if(amb === "equipo") return !esMia(g);
+      return true;
+    }).sort(function(a,b){
+      var ea = (EM[a.emisor_id]||{}).nombre || "", eb = (EM[b.emisor_id]||{}).nombre || "";
+      return ea < eb ? -1 : (ea > eb ? 1 : 0);
+    });
+  },[p.reglas, amb, EM]);
 
-  var deEste = useMemo(function(){
-    return p.reglas.filter(function(g){ return g.emisor_id === eid; });
-  },[p.reglas, eid]);
+  function set(k){
+    return function(v){
+      setFm(function(prev){ var n = Object.assign({}, prev); n[k] = v; return n; });
+    };
+  }
 
-  useEffect(function(){
-    if(eid && (!rid || !reglaDe(p.reglas, eid, rid))){
-      setRid(deEste.length ? deEste[0].receptor_id : "");
-    }
-  },[eid, deEste]);
+  function guardar(){
+    setErr("");
+    if(!fm.emisor_id || !fm.receptor_id){ setErr("Falta elegir emisor y receptor."); return; }
+    var fila = {
+      emisor_id: fm.emisor_id, receptor_id: fm.receptor_id,
+      tipo_comprobante: fm.tipo_comprobante,
+      lleva_igv: fm.tipo_comprobante === "rxh" ? false : !!fm.lleva_igv,
+      detraccion_pct: fm.detraccion_pct === "" ? null : Number(fm.detraccion_pct)/100,
+      detraccion_umbral: fm.detraccion_umbral === "" ? null : Number(fm.detraccion_umbral),
+      codigo_bien: fm.detraccion_pct === "" ? null : (fm.codigo_bien || null),
+      retencion_pct: fm.retencion_pct === "" ? null : Number(fm.retencion_pct)/100,
+      glosa_plantilla: fm.glosa_plantilla || null,
+      notas: fm.notas || null
+    };
+    setYendo(true);
+    p.guardarRegla(fila).then(function(ok){
+      setYendo(false);
+      if(ok){ setFm(VACIA); setAbierta(false); }
+      else setErr("No se pudo guardar. Puede que ya exista una regla para ese par.");
+    });
+  }
 
-  var emisor = propios.filter(function(e){ return e.id===eid; })[0] || null;
-  var regla = reglaDe(p.reglas, eid, rid);
-  var receptor = p.receptores.filter(function(r){ return r.id===rid; })[0] || null;
-
-  useEffect(function(){ setGlosa(regla && regla.glosa_plantilla ? regla.glosa_plantilla : ""); },
-    [regla && regla.glosa_plantilla]);
-
-  var n = Number(String(neto).replace(/,/g,"")) || 0;
-  var c = calcular(regla, n, p.cfg);
-  var tipo = regla ? regla.tipo_comprobante : "factura";
-
-  var R = function(l, v, nota, fuerte){
-    return h("div",{style:{display:"flex",justifyContent:"space-between",
-        alignItems:"baseline",gap:12,padding:"7px 0",
-        borderTop:"1px solid var(--rule)"}},
-      h("div",null, h("span",{style:{fontSize:13}}, l),
-        nota ? h("div",{className:"hint",style:{marginTop:1}}, nota) : null),
-      h("span",{className:"mono",style:{fontSize: fuerte?16:13,
-        color: fuerte?"var(--ink)":"var(--ink70)"}}, v));
-  };
+  var CAB = ["Emisor","Receptor","Tipo","IGV","Detracción","Retención","Glosa"];
 
   return h("div",null,
-    h("div",{className:"dos"},
+    h("div",{className:"hint",style:{marginBottom:16,lineHeight:1.7,maxWidth:640}},
+      "La regla define cómo sale cada comprobante: si lleva IGV, qué detracción corresponde ",
+      "según el receptor y si hay retención. De acá salen los cálculos de Por facturar."),
 
-      h("div",{className:"card",style:{padding:"16px 18px"}},
-        h(Caps,null,"Quién factura a quién"),
-        h("label",{style:{display:"block",marginBottom:12}},
-          h("span",{className:"lbl"},"Emisor"),
-          h("select",{className:"in",value:eid,
-              onChange:function(e){ setEid(e.target.value); }},
-            propios.map(function(e){
-              return h("option",{key:e.id,value:e.id},
-                e.nombre + " · " + e.ruc); }))),
-        emisor ? h("div",{className:"hint",style:{marginTop:-6,marginBottom:12}},
-          (emisor.regimen ? emisor.regimen + " · " : "") +
-          (emisor.ultimo_correlativo ? "último: " + emisor.ultimo_correlativo
-                                     : "sin correlativo registrado")) : null,
+    h(Ambito,{valor:amb, set:setAmb, opciones:[
+      ["mio","Mías",nMias], ["equipo","Del equipo",p.reglas.length-nMias],
+      ["todas","Todas",p.reglas.length]]}),
 
-        h("label",{style:{display:"block",marginBottom:12}},
-          h("span",{className:"lbl"},"Receptor"),
-          h("select",{className:"in",value:rid,
-              onChange:function(e){ setRid(e.target.value); }},
-            deEste.length
-              ? deEste.map(function(g){
-                  var r = p.receptores.filter(function(x){ return x.id===g.receptor_id; })[0];
-                  return h("option",{key:g.receptor_id,value:g.receptor_id},
-                    r ? r.razon_social : g.receptor_id); })
-              : h("option",{value:""},"— sin reglas cargadas —"))),
+    h("div",{className:"card",style:{overflowX:"auto"}},
+      h("table",null,
+        h("thead",null,h("tr",null, CAB.map(function(t,i){
+          return h("th",{key:i,style:{textAlign: i>2?"right":"left",padding:"9px 12px",
+            borderBottom:"1px solid var(--rule)",font:"9px/1 var(--mono)",
+            textTransform:"uppercase",letterSpacing:".12em",color:"var(--ink40)",
+            whiteSpace:"nowrap"}}, t); }))),
+        h("tbody",null, filas.map(function(g,i){
+          var e = EM[g.emisor_id] || {}, r = RE[g.receptor_id] || {};
+          var td = function(extra){
+            return Object.assign({padding:"8px 12px",borderTop:"1px solid var(--rule)",
+              fontSize:12}, extra||{});
+          };
+          return h("tr",{key:i},
+            h("td",{style:td()}, e.nombre || "—",
+              e.ruc ? h("div",{className:"hint mono"}, e.ruc) : null),
+            h("td",{style:td()}, r.razon_social || "—"),
+            h("td",{className:"mono",style:td({fontSize:11})}, g.tipo_comprobante),
+            h("td",{className:"mono",style:td({textAlign:"right",fontSize:11})},
+              g.lleva_igv ? "18%" : "—"),
+            h("td",{className:"mono",style:td({textAlign:"right",fontSize:11})},
+              g.detraccion_pct == null ? "—"
+                : Math.round(Number(g.detraccion_pct)*100) + "%" +
+                  (g.detraccion_umbral ? " > " + Math.round(g.detraccion_umbral) : " siempre")),
+            h("td",{className:"mono",style:td({textAlign:"right",fontSize:11})},
+              g.retencion_pct == null ? "—" : Math.round(Number(g.retencion_pct)*100) + "%"),
+            h("td",{style:td({textAlign:"right",fontSize:11,color:"var(--ink40)"})},
+              g.glosa_plantilla || "—"));
+        })))),
 
-        h(Campo,{label:"Neto (sin IGV)",tipo:"text",value:neto,
-          ph:"0.00",onChange:setNeto,
-          nota:"El monto que manda Javier. Si te lo pasan con IGV, divídelo entre 1.18."}),
+    !filas.length ? h("div",{className:"hint",style:{marginTop:12}},
+      "No hay reglas en este ámbito.") : null,
 
-        h("div",{style:{marginTop:12}},
-          h("span",{className:"lbl"},"Glosa"),
-          h("textarea",{className:"in",rows:2,value:glosa,
-            placeholder:"la que te pasa Martín",
-            onChange:function(e){ setGlosa(e.target.value); }}),
-          glosa ? h("div",{style:{marginTop:4}}, h(Copiar,{texto:glosa,rotulo:"copiar glosa"})) : null),
+    h("div",{style:{marginTop:18}},
+      !abierta
+        ? h("button",{className:"btn sec",onClick:function(){ setAbierta(true); }},
+            "cargar nueva regla")
+        : h("div",{className:"card",style:{padding:"16px 18px",maxWidth:620}},
+            h(Caps,null,"Nueva regla"),
+            h("div",{className:"dos",style:{gap:12}},
+              h("label",{style:{display:"block"}},
+                h("span",{className:"lbl"},"Emisor"),
+                h("select",{className:"in",value:fm.emisor_id,
+                    onChange:function(e){ set("emisor_id")(e.target.value); }},
+                  h("option",{value:""},"— elegir —"),
+                  p.emisores.filter(function(e){ return e.activo; }).map(function(e){
+                    return h("option",{key:e.id,value:e.id}, e.nombre + " · " + e.ruc); }))),
+              h("label",{style:{display:"block"}},
+                h("span",{className:"lbl"},"Receptor"),
+                h("select",{className:"in",value:fm.receptor_id,
+                    onChange:function(e){ set("receptor_id")(e.target.value); }},
+                  h("option",{value:""},"— elegir —"),
+                  p.receptores.map(function(r){
+                    return h("option",{key:r.id,value:r.id}, r.razon_social); })))),
 
-        !regla && rid ? h("div",{className:"hint",style:{marginTop:12,
-            color:"var(--ambar)"}},
-          "No hay regla cargada para esta combinación: se está calculando con lo genérico (IGV 18%, detracción 10% sobre S/700).") : null),
+            h("div",{className:"dos",style:{gap:12,marginTop:12}},
+              h("label",{style:{display:"block"}},
+                h("span",{className:"lbl"},"Tipo de comprobante"),
+                h("select",{className:"in",value:fm.tipo_comprobante,
+                    onChange:function(e){ set("tipo_comprobante")(e.target.value); }},
+                  h("option",{value:"factura"},"Factura"),
+                  h("option",{value:"rxh"},"Recibo por honorarios"),
+                  h("option",{value:"boleta"},"Boleta"))),
+              fm.tipo_comprobante === "rxh"
+                ? h(Campo,{label:"Retención %",tipo:"number",value:fm.retencion_pct,
+                    ph:"8",onChange:set("retencion_pct"),
+                    nota:"Cuarta categoría: normalmente 8."})
+                : h(Campo,{label:"Detracción %",tipo:"number",value:fm.detraccion_pct,
+                    ph:"10",onChange:set("detraccion_pct"),
+                    nota:"Vacío si no corresponde detracción."})),
 
-      h("div",{className:"card",style:{padding:"16px 18px"}},
-        h(Caps,null, tipo === "rxh" ? "Recibo por honorarios" : "Factura"),
-        receptor ? h("div",{style:{fontSize:13,marginBottom:4}}, receptor.razon_social,
-          h("span",{className:"mono hint"}, " · " + receptor.ruc)) : null,
+            fm.tipo_comprobante !== "rxh" && fm.detraccion_pct !== ""
+              ? h("div",{className:"dos",style:{gap:12,marginTop:12}},
+                  h(Campo,{label:"Umbral",tipo:"number",value:fm.detraccion_umbral,
+                    ph:"700",onChange:set("detraccion_umbral"),
+                    nota:"Vacío = siempre, sin importar el monto (Bros)."}),
+                  h(Campo,{label:"Código de bien",value:fm.codigo_bien,
+                    ph:"037",onChange:set("codigo_bien"),
+                    nota:"037 para servicios empresariales, Anexo 3."}))
+              : null,
 
-        h("div",{style:{marginTop:12}},
-          R("Valor del servicio", money(c.neto)),
-          tipo === "rxh"
-            ? R("Sin IGV", "—", "Cuarta categoría: el recibo no lleva IGV.")
-            : R("IGV " + Math.round(c.igvPct*100) + "%", money(c.igv)),
-          R("Total del comprobante", money(c.total), null, true),
-          c.retencion > 0
-            ? R("Retención 8%", "− " + money(c.retencion),
-                "4ta categoría. La retiene quien paga.")
-            : null,
-          c.detraccion > 0
-            ? R("Detracción " + Math.round(Number(regla ? regla.detraccion_pct : 0.10)*100) + "%",
-                "− " + money(c.detraccion),
-                "Bien " + ((regla && regla.codigo_bien) || "037") + " · va a la cuenta de detracciones.")
-            : (tipo === "rxh" ? null
-               : R("Detracción", "no aplica",
-                   regla && regla.detraccion_umbral
-                     ? "El total no pasa de " + money(regla.detraccion_umbral) + "."
-                     : "Sin detracción para este receptor.")),
-          R("Cae al banco", money(c.banco), null, true)),
+            h("div",{style:{marginTop:12}},
+              h("span",{className:"lbl"},"Glosa por defecto"),
+              h("textarea",{className:"in",rows:2,value:fm.glosa_plantilla,
+                placeholder:"la que suele ir en este comprobante",
+                onChange:function(e){ set("glosa_plantilla")(e.target.value); }})),
 
-        h("div",{style:{marginTop:16,paddingTop:12,borderTop:"1px solid var(--rule)"}},
-          h("div",{className:"hint",style:{lineHeight:1.8}},
-            tipo === "rxh"
-              ? "El emisor no suma IGV; el pago a cuenta de renta no corre."
-              : "Suma " + money(c.igv) + " al IGV del mes y " + money(c.renta) +
-                " al pago a cuenta de renta (1%).")),
+            err ? h("div",{className:"mono",style:{fontSize:11,color:"var(--alerta)",
+              marginTop:10}}, err) : null,
 
-        c.total > 0 ? h("div",{className:"row",style:{marginTop:12,gap:12}},
-          h(Copiar,{texto:c.neto.toFixed(2),rotulo:"copiar neto"}),
-          h(Copiar,{texto:c.total.toFixed(2),rotulo:"copiar total"}),
-          c.detraccion>0 ? h(Copiar,{texto:c.detraccion.toFixed(2),rotulo:"copiar detracción"}) : null
-        ) : null)),
+            h("div",{className:"row",style:{marginTop:14,gap:10}},
+              h("button",{className:"btn",disabled:yendo,onClick:guardar},
+                yendo ? "guardando…" : "guardar regla"),
+              h("button",{className:"lk",onClick:function(){
+                setAbierta(false); setErr(""); setFm(VACIA); }},"cancelar")))),
 
-    h("div",{style:{marginTop:28}},
-      h(Caps,null,"Reglas cargadas"),
-      h("div",{className:"card",style:{overflowX:"auto"}},
-        h("table",null,
-          h("thead",null,h("tr",null,
-            ["Emisor","Receptor","Tipo","IGV","Detracción","Retención","Glosa"].map(function(t,i){
-              return h("th",{key:i,style:{textAlign: i>2?"right":"left",padding:"9px 12px",
-                borderBottom:"1px solid var(--rule)",font:"9px/1 var(--mono)",
-                textTransform:"uppercase",letterSpacing:".12em",color:"var(--ink40)",
-                whiteSpace:"nowrap"}}, t); }))),
-          h("tbody",null, p.reglas.filter(function(g){
-              var e = p.emisores.filter(function(x){ return x.id===g.emisor_id; })[0];
-              return e && e.relacion !== "asesor";
-            }).map(function(g,i){
-              var e = p.emisores.filter(function(x){ return x.id===g.emisor_id; })[0] || {};
-              var r = p.receptores.filter(function(x){ return x.id===g.receptor_id; })[0] || {};
-              return h("tr",{key:i},
-                h("td",{style:{padding:"8px 12px",borderTop:"1px solid var(--rule)",
-                  fontSize:12}}, e.nombre),
-                h("td",{style:{padding:"8px 12px",borderTop:"1px solid var(--rule)",
-                  fontSize:12}}, r.razon_social),
-                h("td",{className:"mono",style:{padding:"8px 12px",
-                  borderTop:"1px solid var(--rule)",fontSize:11}}, g.tipo_comprobante),
-                h("td",{className:"mono",style:{padding:"8px 12px",textAlign:"right",
-                  borderTop:"1px solid var(--rule)",fontSize:11}},
-                  g.lleva_igv ? "18%" : "—"),
-                h("td",{className:"mono",style:{padding:"8px 12px",textAlign:"right",
-                  borderTop:"1px solid var(--rule)",fontSize:11}},
-                  g.detraccion_pct == null ? "—"
-                    : Math.round(Number(g.detraccion_pct)*100) + "%" +
-                      (g.detraccion_umbral ? " > " + Math.round(g.detraccion_umbral) : " siempre")),
-                h("td",{className:"mono",style:{padding:"8px 12px",textAlign:"right",
-                  borderTop:"1px solid var(--rule)",fontSize:11}},
-                  g.retencion_pct == null ? "—" : Math.round(Number(g.retencion_pct)*100) + "%"),
-                h("td",{style:{padding:"8px 12px",textAlign:"right",
-                  borderTop:"1px solid var(--rule)",fontSize:11,color:"var(--ink40)"}},
-                  g.glosa_plantilla || "—"));
-            })))),
-      h("div",{className:"hint",style:{marginTop:10}},
-        "Las comisiones de los asesores a Rena Ware usan la regla estándar y se ven en “Por facturar”.")));
+    h("div",{className:"hint",style:{marginTop:20,lineHeight:1.8}},
+      "Rena Ware: detracción 10% sólo cuando el total con IGV pasa de S/700. ",
+      h("br",null),
+      "Bros Consultores: 12% siempre, sin umbral. ",
+      h("br",null),
+      "Recibo por honorarios: sin IGV, con retención de 8% de cuarta categoría."));
 }
 
 /* ------------------------------------------------------------- mis deudas */
@@ -1686,6 +1745,7 @@ function Emitir(p){
 function Deudas(p){
   var s1 = useState(null), marcando = s1[0], setMarcando = s1[1];
   var s2 = useState(hoyISO()), fpago = s2[0], setFpago = s2[1];
+  var s3 = useState("mio"), amb = s3[0], setAmb = s3[1];
 
   var grupos = useMemo(function(){
     var em = {}; p.emisores.forEach(function(e){ em[e.id] = e; });
@@ -1711,7 +1771,19 @@ function Deudas(p){
     });
   },[p.obligs, p.cuotas, p.emisores]);
 
-  if(!grupos.length) return h(Vacio,{nota:"Los fraccionamientos y el IGV prorrogado se cargan en fact_obligaciones."},
+  var nMias = grupos.filter(function(g){ return p.esMio(g.e.ruc); }).length;
+  var todos = grupos;
+  grupos = grupos.filter(function(g){
+    if(amb === "mio") return p.esMio(g.e.ruc);
+    if(amb === "equipo") return !p.esMio(g.e.ruc);
+    return true;
+  });
+
+  var CHIPS = h(Ambito,{valor:amb, set:setAmb, opciones:[
+    ["mio","Mías",nMias], ["equipo","Del equipo",todos.length-nMias],
+    ["todas","Todas",todos.length]]});
+
+  if(!todos.length) return h(Vacio,{nota:"Los fraccionamientos y el IGV prorrogado se cargan en fact_obligaciones."},
     "No hay deudas cargadas.");
 
   var saldoTot = r2(grupos.reduce(function(s,g){ return s + g.saldo; },0));
@@ -1725,6 +1797,10 @@ function Deudas(p){
   }
 
   return h("div",null,
+    CHIPS,
+    !grupos.length ? h("div",{className:"card",style:{padding:"30px 16px",
+      textAlign:"center",color:"var(--ink70)",fontSize:14}},
+      "No hay deudas en este ámbito.") : null,
     h("div",{className:"grid",style:{gridTemplateColumns:
         "repeat(auto-fit,minmax(170px,1fr))",marginBottom:22}},
       h(Kpi,{l:"Saldo total",v:miles(saldoTot),
