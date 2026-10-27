@@ -393,6 +393,28 @@ setTimeout(async () => {
     /trabados por falta de dato/.test(T2b) && /Padrón/.test(T2b));
   await chip("Con RUC");
 
+  /* la casilla para anotar a mano lo que viene: lo propio ya no sale de Aurora */
+  {
+    const b = [...doc.querySelectorAll("button.lk")]
+      .find(x => x.textContent === "agregar una factura que viene");
+    ok("ofrece anotar una factura que viene", !!b);
+    if (b) {
+      b.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+      await pausa(80);
+      const TN = txt();
+      ok("el formulario pide emisor, receptor, neto y glosa",
+        /Emisor/.test(TN) && /Receptor/.test(TN) &&
+        /Neto \(sin IGV\)/.test(TN) && /Glosa/.test(TN));
+      ok("dice de dónde sale el monto", /que te manda Javier/.test(TN));
+      ok("la fecha es estimada hasta emitirla",
+        /se corrige al marcarla como emitida/.test(TN));
+      b.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+      await pausa(60);
+    }
+  }
+
+  /* --- padrón: una sola base con la del equipo --- */
+
   /* --- declaraciones --- */
   await irA("Declaraciones");
   ok("declaraciones separa mías del equipo", /Mías/.test(txt()));
@@ -448,6 +470,20 @@ setTimeout(async () => {
     && /CARLA PRUEBA/.test(T4));
   ok("marca a la desactivada", /desactivado/.test(T4));
   ok("muestra el grupo del cronograma", /grupo 1/.test(T4));
+  {
+    const abrir = [...doc.querySelectorAll("button.btn.sec.sm")]
+      .find(x => x.textContent === "Abrir");
+    ok("cada fila del padrón se puede abrir", !!abrir);
+    if (abrir) {
+      abrir.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+      await pausa(80);
+      const TP = txt();
+      ok("la ficha trae los datos de la base del equipo",
+        /DNI/.test(TP) && /Distrito/.test(TP) && /Patrocinador/.test(TP));
+      ok("la ficha dice que la base es compartida",
+        /misma base que usa el resto de la plataforma/.test(TP));
+    }
+  }
 
   /* --- anual --- */
   await irA("Anual");

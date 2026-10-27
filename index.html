@@ -260,8 +260,13 @@ function App(props){
 
   var recargar = useCallback(function(){
     return Promise.all([
-      db.from("eq_personas").select("id,nombre,codigo_asesor,ruc,cuenta_detraccion,cci,banco,"+
-        "cuenta_bancaria,codigo_division,factura_desde,regimen,activo,celular,correo,notas")
+      /* eq_personas es la base unica de asesores de la plataforma: se trae
+         entera, no una rebanada. Lo propio de facturacion son solo el RUC,
+         las cuentas y desde cuando declara. */
+      db.from("eq_personas").select("id,nombre,codigo_asesor,ruc,cuenta_detraccion,cci,"+
+        "banco,cuenta_bancaria,codigo_division,factura_desde,regimen,activo,celular,"+
+        "correo,notas,dni,distrito,provincia,departamento,patrocinador_id,"+
+        "ingreso_fecha,nacimiento,origen")
         .order("nombre"),
       db.from("fact_facturas").select("*").order("fecha_emision"),
       db.from("fact_declaraciones").select("*"),
@@ -541,7 +546,8 @@ function App(props){
   }
   function guardarPersona(p){
     var campos = ["ruc","cuenta_detraccion","cci","banco","cuenta_bancaria",
-                  "codigo_division","factura_desde","regimen","activo","celular","correo","notas"];
+                  "codigo_division","factura_desde","regimen","activo","celular",
+                  "correo","notas","dni","distrito","provincia","departamento"];
     var patch = {}; campos.forEach(function(c){ patch[c] = p[c] === "" ? null : p[c]; });
     return db.from("eq_personas").update(patch).eq("id", p.id).select().then(function(r){
       if(r.error){ avisar("No se pudo guardar: " + r.error.message); return false; }
@@ -550,6 +556,15 @@ function App(props){
       avisar("Datos guardados.");
       return true;
     });
+  }
+  function crearPendiente(fila){
+    return db.from("fact_facturas").insert(fila).select()
+      .then(function(r){
+        if(r.error){ avisar("No se pudo anotar: " + r.error.message); return false; }
+        setFacturas(function(prev){ return prev.concat(r.data); });
+        avisar("Anotada como pendiente de facturar.");
+        return true;
+      });
   }
   function guardarRegla(fila){
     return db.from("fact_reglas_emision").insert(fila).select()
@@ -639,7 +654,9 @@ function App(props){
         borradores:borradores,totFact:totFact,totPend:totPend,sinRuc:sinRuc,
         oblig:oblig,obPend:obPend,vencidas:vencidas,ir:setVista}) : null,
       vista==="facturar" ? h(PorFacturar,{borradores:borradores,emitidas:emitidas,
-        P:P,cfg:cfg,esMio:esMio,marcar:marcarFacturadas,desmarcar:desmarcar}) : null,
+        P:P,cfg:cfg,esMio:esMio,emisores:emisores,receptores:receptores,
+        reglas:reglas,crear:crearPendiente,
+        marcar:marcarFacturadas,desmarcar:desmarcar}) : null,
       vista==="declaraciones" ? h(Declaraciones,{oblig:oblig,esMio:esMio,
         guardar:guardarDecl,guardarVarias:guardarVarias,avisar:avisar}) : null,
       vista==="padron" ? h(Padron,{personas:personas,facturas:facturas,
@@ -725,6 +742,7 @@ function PorFacturar(p){
   var s3 = useState(false), modal = s3[0], setModal = s3[1];
   var s4 = useState(false), verHechas = s4[0], setVerHechas = s4[1];
   var s5 = useState("con"), filtro = s5[0], setFiltro = s5[1];
+  var s6 = useState(false), nueva = s6[0], setNueva = s6[1];
 
   var todosGrupos = useMemo(function(){
     var g = {};
@@ -742,8 +760,11 @@ function PorFacturar(p){
 
   /* Quien no tiene RUC no puede facturar: es un trabajo distinto (conseguir
      el dato) y por eso va en su propia lista, no mezclado con lo accionable. */
-  var conRuc = todosGrupos.filter(function(g){ return !!(g.per && g.per.ruc); });
-  var sinRuc = todosGrupos.filter(function(g){ return !(g.per && g.per.ruc); });
+  var tieneRuc = function(g){
+    return !!((g.per && g.per.ruc) || g.fs[0].ruc);
+  };
+  var conRuc = todosGrupos.filter(tieneRuc);
+  var sinRuc = todosGrupos.filter(function(g){ return !tieneRuc(g); });
   var grupos = filtro === "con" ? conRuc : (filtro === "sin" ? sinRuc : todosGrupos);
   var sumaDe = function(gs){
     return r2(gs.reduce(function(s,g){
@@ -770,7 +791,10 @@ function PorFacturar(p){
     });
   }
   function bloqueo(per, f){
-    if(!per || !per.ruc) return "sin RUC";
+    /* Lo propio se anota a mano y no tiene persona en el padron: ahi el RUC y
+       la cuenta de detraccion viven en el emisor, ya validados por la regla. */
+    if(!per) return f.ruc ? null : "sin RUC";
+    if(!per.ruc) return "sin RUC";
     if(Number(f.total) > (p.cfg.detraccion_umbral||700) && !per.cuenta_detraccion)
       return "falta cuenta de detracción";
     return null;
@@ -781,8 +805,15 @@ function PorFacturar(p){
     h("div",{className:"row",style:{justifyContent:"space-between",marginBottom:10}},
       h("input",{className:"in",style:{maxWidth:260},placeholder:"buscar nombre, RUC o código…",
         value:q,onChange:function(e){ setQ(e.target.value); }}),
-      h("button",{className:"lk",onClick:function(){ setVerHechas(!verHechas); }},
-        verHechas ? "ver pendientes" : "ver ya facturadas")),
+      h("div",{className:"row",style:{gap:12}},
+        h("button",{className:"lk",onClick:function(){ setNueva(!nueva); }},
+          nueva ? "cerrar" : "agregar una factura que viene"),
+        h("button",{className:"lk",onClick:function(){ setVerHechas(!verHechas); }},
+          verHechas ? "ver pendientes" : "ver ya facturadas"))),
+
+    nueva ? h(NuevaPendiente,{emisores:p.emisores,receptores:p.receptores,
+      reglas:p.reglas,cfg:p.cfg,crear:p.crear,
+      cerrar:function(){ setNueva(false); }}) : null,
 
     h("div",{className:"hint",style:{marginBottom:14}},
       corte
@@ -854,6 +885,116 @@ function PorFacturar(p){
           setSel({}); setModal(false);
         });
       }}) : null);
+}
+
+/* Agregar a mano una factura que viene. Para lo propio, que ya no sale del
+   PDF de Aurora: Javier manda el monto, Martín la glosa, y esto la deja
+   anotada como pendiente hasta que se emita. */
+function NuevaPendiente(p){
+  var propios = useMemo(function(){
+    return p.emisores.filter(function(e){
+      return e.activo && e.relacion !== "asesor";
+    });
+  },[p.emisores]);
+
+  var s1 = useState(""), eid = s1[0], setEid = s1[1];
+  var s2 = useState(""), rid = s2[0], setRid = s2[1];
+  var s3 = useState(""), neto = s3[0], setNeto = s3[1];
+  var s4 = useState(""), glosa = s4[0], setGlosa = s4[1];
+  var s5 = useState(hoyISO()), fecha = s5[0], setFecha = s5[1];
+  var s6 = useState(false), yendo = s6[0], setYendo = s6[1];
+  var s7 = useState(""), err = s7[0], setErr = s7[1];
+
+  useEffect(function(){
+    if(!eid && propios.length){
+      var emp = propios.filter(function(e){ return e.tipo === "empresa"; })[0];
+      setEid((emp || propios[0]).id);
+    }
+  },[propios, eid]);
+
+  var deEste = useMemo(function(){
+    return p.reglas.filter(function(g){ return g.emisor_id === eid; });
+  },[p.reglas, eid]);
+
+  useEffect(function(){
+    if(eid && !reglaDe(p.reglas, eid, rid)) {
+      setRid(deEste.length ? deEste[0].receptor_id : "");
+    }
+  },[eid, deEste]);
+
+  var regla = reglaDe(p.reglas, eid, rid);
+  var emisor = propios.filter(function(e){ return e.id === eid; })[0] || null;
+  var n = Number(String(neto).replace(/,/g,"")) || 0;
+  var c = calcular(regla, n, p.cfg);
+
+  function guardar(){
+    setErr("");
+    if(!eid || !rid){ setErr("Falta elegir quién factura a quién."); return; }
+    if(n <= 0){ setErr("Falta el monto."); return; }
+    setYendo(true);
+    p.crear({
+      emisor_id: eid, receptor_id: rid,
+      persona_id: emisor ? (emisor.persona_id || null) : null,
+      asesor: emisor ? emisor.nombre : null,
+      ruc: emisor ? emisor.ruc : null,
+      tipo_comprobante: regla ? regla.tipo_comprobante : "factura",
+      serie: emisor ? emisor.serie_default : null,
+      fecha_emision: fecha, fecha_estimada: true, origen: "manual",
+      descripcion: glosa || (regla && regla.glosa_plantilla) || null,
+      neto: r2(n), detraccion: c.detraccion, retencion: c.retencion,
+      a_banco: c.banco, renta: c.renta, estado: "borrador"
+    }).then(function(ok){
+      setYendo(false);
+      if(ok){ setNeto(""); setGlosa(""); p.cerrar(); }
+      else setErr("No se pudo guardar.");
+    });
+  }
+
+  return h("div",{className:"card",style:{padding:"16px 18px",marginBottom:16}},
+    h(Caps,null,"Factura que viene"),
+    h("div",{className:"dos",style:{gap:12}},
+      h("label",{style:{display:"block"}},
+        h("span",{className:"lbl"},"Emisor"),
+        h("select",{className:"in",value:eid,
+            onChange:function(e){ setEid(e.target.value); }},
+          propios.map(function(e){
+            return h("option",{key:e.id,value:e.id}, e.nombre); }))),
+      h("label",{style:{display:"block"}},
+        h("span",{className:"lbl"},"Receptor"),
+        h("select",{className:"in",value:rid,
+            onChange:function(e){ setRid(e.target.value); }},
+          deEste.length
+            ? deEste.map(function(g){
+                var r = p.receptores.filter(function(x){ return x.id===g.receptor_id; })[0];
+                return h("option",{key:g.receptor_id,value:g.receptor_id},
+                  r ? r.razon_social : g.receptor_id); })
+            : h("option",{value:""},"— sin reglas para este emisor —")))),
+
+    h("div",{className:"dos",style:{gap:12,marginTop:12}},
+      h(Campo,{label:"Neto (sin IGV)",value:neto,onChange:setNeto,ph:"0.00",
+        nota:"el monto que te manda Javier"}),
+      h(Campo,{label:"Fecha estimada",tipo:"date",value:fecha,onChange:setFecha,
+        nota:"se corrige al marcarla como emitida"})),
+
+    h("div",{style:{marginTop:12}},
+      h("span",{className:"lbl"},"Glosa"),
+      h("textarea",{className:"in",rows:2,value:glosa,
+        placeholder:(regla && regla.glosa_plantilla) || "la que te pasa Martín",
+        onChange:function(e){ setGlosa(e.target.value); }})),
+
+    n > 0 ? h("div",{className:"hint",style:{marginTop:10,lineHeight:1.8}},
+      "Total " + money(c.total) +
+      (c.detraccion > 0 ? " · detracción " + money(c.detraccion) : " · sin detracción") +
+      (c.retencion > 0 ? " · retención " + money(c.retencion) : "") +
+      " · al banco " + money(c.banco)) : null,
+
+    err ? h("div",{className:"mono",style:{fontSize:11,color:"var(--alerta)",
+      marginTop:10}}, err) : null,
+
+    h("div",{className:"row",style:{marginTop:14,gap:10}},
+      h("button",{className:"btn",disabled:yendo,onClick:guardar},
+        yendo ? "guardando…" : "anotar como pendiente"),
+      h("button",{className:"lk",onClick:p.cerrar},"cancelar")));
 }
 
 function ModalFacturar(p){
@@ -1373,6 +1514,12 @@ function Padron(p){
 
     abierta ? h(Ficha,{persona:abierta,facturas:p.facturas.filter(function(f){
         return f.persona_id === abierta.id; }),
+      patrocinador:(function(){
+        if(!abierta.patrocinador_id) return null;
+        for(var i=0;i<p.personas.length;i++)
+          if(p.personas[i].id === abierta.patrocinador_id) return p.personas[i].nombre;
+        return null;
+      })(),
       onCerrar:function(){ setAbierta(null); },guardar:p.guardar}) : null);
 }
 
@@ -1399,12 +1546,31 @@ function Ficha(p){
           onClick:function(){ setTab(t[0]); }}, t[1]);
       })),
     h("div",{style:{padding:"18px 20px"}},
-      tab==="datos" ? h("div",{style:{display:"grid",gap:12,
-          gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))"}},
-        h(Campo,{label:"Código de asesor",value:x.codigo_asesor,
-          onChange:set("codigo_asesor")}),
-        h(Campo,{label:"Celular",value:x.celular,onChange:set("celular")}),
-        h(Campo,{label:"Correo",value:x.correo,onChange:set("correo")})) : null,
+      tab==="datos" ? h("div",null,
+        h("div",{style:{display:"grid",gap:12,
+            gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))"}},
+          h(Campo,{label:"Código de asesor",value:x.codigo_asesor,
+            onChange:set("codigo_asesor"),nota:"viene de Rena Ware"}),
+          h(Campo,{label:"DNI",value:x.dni,onChange:set("dni")}),
+          h(Campo,{label:"Celular",value:x.celular,onChange:set("celular")}),
+          h(Campo,{label:"Correo",value:x.correo,onChange:set("correo")}),
+          h(Campo,{label:"Distrito",value:x.distrito,onChange:set("distrito")}),
+          h(Campo,{label:"Provincia",value:x.provincia,onChange:set("provincia")}),
+          h(Campo,{label:"Departamento",value:x.departamento,
+            onChange:set("departamento")})),
+        h("div",{className:"sep",style:{marginTop:14,paddingTop:12}},
+          h(Caps,null,"De la base del equipo"),
+          h("div",{className:"hint",style:{lineHeight:1.9}},
+            "Patrocinador: " + (p.patrocinador || "—"), h("br",null),
+            "Ingresó: " + (x.ingreso_fecha ? fechaCorta(x.ingreso_fecha) : "—"),
+            h("br",null),
+            "Nacimiento: " + (x.nacimiento ? fechaCorta(x.nacimiento) : "—"),
+            h("br",null),
+            "Origen del registro: " + (x.origen || "—"))),
+        h("div",{className:"card hint",style:{padding:"9px 13px",marginTop:12,
+            lineHeight:1.7}},
+          "Es la misma base que usa el resto de la plataforma. Acá se le agregan "+
+          "los datos de facturación; los de contacto y ubicación se comparten.")) : null,
 
       tab==="tributario" ? h("div",null,
         h("div",{style:{display:"grid",gap:12,

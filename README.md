@@ -21,23 +21,35 @@ registro, calcula lo que se debe y avisa antes de que venza.
   falta. Se marca pagada (y se deshace) desde ahí. El aviso del Art. 36 sale
   sólo en fraccionamientos; una deuda de IGV vencida no se pierde, acumula
   interés moratorio.
-- **Emitir** — para cuando Javier manda el monto y Martín la glosa. Se elige
-  emisor y receptor, se pone el neto y sale el comprobante entero: IGV o no,
-  detracción con su porcentaje y umbral, retención si es recibo, y cuánto cae
-  al banco. Debajo, las reglas cargadas.
+- **Emitir** — las reglas de emisión por par emisor-receptor, con alta de
+  reglas nuevas. No calcula: los montos vienen dados. La aritmética sigue en
+  `calcular()` porque la usa el formulario de facturas que vienen y el chequeo
+  del IGV mensual.
 - **Resumen** — facturado del año, pendiente por facturar, cuánto está trabado
   por falta de RUC, y declaraciones vencidas.
-- **Por facturar** — las comisiones pendientes agrupadas por asesor. Se marcan
-  con un check al emitir la factura. Bloquea a quien no tiene RUC, y a quien
-  supera S/700 sin cuenta de detracción.
-- **Declaraciones** — matriz del año por asesor y vista mes a mes:
+- **Por facturar** — las comisiones pendientes agrupadas por asesor, separadas
+  en **con RUC** (se factura hoy) y **sin RUC** (falta un dato, es otro
+  trabajo). Arriba dice hasta qué semana llega el reporte de Aurora. Lo propio
+  ya no sale de ese reporte: se anota a mano con "agregar una factura que
+  viene", que calcula detracción y retención con la regla del par.
+- **Declaraciones** — matriz del año y vista mes a mes, con filtro mías/equipo:
   SIRE → presentar el 621 → pagar IGV (1011) y renta (3121) por separado.
-  Todo reversible.
-- **Padrón** — datos de cada asesor: RUC, cuentas, código de división,
-  desde cuándo declara. Activar y desactivar.
-- **Anual** — ingresos del ejercicio, gastos cargados a mano, y proyección de
-  renta a tasas RMT (10% hasta 15 UIT, 29.5% encima) descontando los pagos
-  a cuenta.
+  Cada mes abre el **detalle del 0621**: ventas e IGV precargados de las
+  facturas, y de la constancia del contador las compras, el crédito fiscal
+  (casilla 178, total), el saldo a favor de los dos meses, las retenciones, los
+  ingresos netos, el pago a cuenta, la retención de 4ta (3042, va en el PLAME)
+  y los otros gastos. Chequea en vivo que el IGV declarado salga de
+  ventas − crédito − saldo anterior − retenciones, y que el pago a cuenta sea
+  el 1% de los ingresos. Todo reversible.
+- **Padrón** — la misma `eq_personas` que usa el resto de la plataforma, no una
+  copia: DNI, contacto, ubicación, patrocinador e ingreso se comparten; acá se
+  le suman RUC, cuentas y desde cuándo declara. No se agregan asesores a mano:
+  entran cuando aparecen en un reporte con detalle para facturar.
+- **Anual** — de sólo lectura: se arma sumando los meses. Régimen MYPE para
+  todos. Descuenta los pagos a cuenta **pagados**, no los declarados: un 0621
+  presentado no es un pago, y los 0621 dicen "importe pagado 0,00" porque el
+  pago va aparte. Avisa cuántos meses están sin compras cargadas y cuánto hay
+  declarado sin pagar.
 
 ## Reglas que respeta
 
@@ -48,6 +60,10 @@ registro, calcula lo que se debe y avisa antes de que venza.
   se cae al genérico de `fact_config`.
 - Recibo por honorarios: sin IGV, con retención de 8% de cuarta categoría.
   Es otro mecanismo, no una detracción.
+- Una factura anulada no se borra: se declaró, y lo que la cancela es la nota
+  de crédito, que entra en negativo. Excluirla además sería restar dos veces.
+- "Mío" sale de `fact_emisores.relacion = 'propio'`, no de una lista en el
+  código: Portugal Research, el RUC 10 de Nelson y su esposa.
 - Fraccionamiento Art. 36: tributo 8021, se paga con NPS o Form. 1662 citando
   el número de RI. Dos cuotas consecutivas impagas y se pierde.
 - Cronograma SUNAT por último dígito del RUC (`fact_vencimientos`).
@@ -90,7 +106,7 @@ el cotizador. Después de cualquier cambio:
 
 ```bash
 cd pruebas
-node prueba.js    # sintaxis + 72 aserciones de comportamiento en jsdom
+node prueba.js    # sintaxis + 108 aserciones de comportamiento en jsdom
 node ver.js       # render real en Chromium, escritorio y celular
 ```
 
