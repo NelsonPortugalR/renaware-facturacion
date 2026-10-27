@@ -64,7 +64,10 @@ const facturas = [
   // p3 inactiva pero con factura emitida
   fac("f5", "p3", "CARLA PRUEBA TRES", "10296091869", 800, "emitida", ANIO + "-06-12", 24),
   // propio: junio quedó vencido y sin declaración cargada -> es un hueco
-  fac("f6", "p4", "PORTUGAL PRUEBA", "20600022653", 2000, "emitida", ANIO + "-06-15", 24)
+  fac("f6", "p4", "PORTUGAL PRUEBA", "20600022653", 2000, "emitida", ANIO + "-06-15", 24),
+  // año anterior: el cronograma cargado no lo cubre, pero venció igual
+  fac("f7", "p4", "PORTUGAL PRUEBA", "20600022653", 500, "emitida",
+      (ANIO - 1) + "-12-31", 1)
 ];
 
 // cronograma: grupo "1" vence el 19 del mes siguiente; grupo "9" el 23
@@ -248,6 +251,11 @@ setTimeout(async () => {
   ok("nombra el mes y a quién", /junio|julio|agosto|setiembre/.test(T));
   ok("aclara que no es una deuda sino un dato que falta",
     /no se sabe/.test(T));
+  /* un periodo de un año que el cronograma no cubre venció igual: lo que no
+     se sabe es el día, y eso hay que decirlo en vez de callarlo */
+  ok("cuenta los periodos sin fila de cronograma",
+    /día exacto hay que confirmarlo en SUNAT/.test(T));
+  ok("y los nombra", /diciembre/.test(T));
   ok("avisa de los RUC propios sin comprobantes",
     /sin ningún comprobante cargado/.test(T));
   ok("nombra el RUC mudo", /10449906662/.test(T));
@@ -370,7 +378,7 @@ setTimeout(async () => {
      trabado sin ruc: 300 neto -> 354 */
   await irA("Resumen");
   const TR = txt();
-  ok("facturado = S/ 5,074", TR.indexOf("S/ 5,074") >= 0);
+  ok("facturado = S/ 5,664", TR.indexOf("S/ 5,664") >= 0);
   ok("pendiente = S/ 590", TR.indexOf("S/ 590") >= 0);
   ok("trabado sin RUC = S/ 354", TR.indexOf("S/ 354") >= 0);
   ok("cuenta 1 persona sin RUC", /1 personas|1 persona/.test(TR));

@@ -365,7 +365,10 @@ function App(props){
           igvPag:!!d.igv_pagado_en, renPag:!!d.renta_pagado_en,
           cerrada: pres && (igv<=0 || !!d.igv_pagado_en) && (renta<=0 || !!d.renta_pagado_en),
           vigente: !(a === hoy.anio && m === hoy.mes),
-          vence: vmap[a+"|"+m+"|"+grupoDe(p.ruc)] || null
+          vence: vmap[a+"|"+m+"|"+grupoDe(p.ruc)] || null,
+          /* Si el cronograma no tiene ese anio, no es que no venza: es que
+             no sabemos que dia. Se marca para no darlo por bueno. */
+          sinCronograma: !vmap[a+"|"+m+"|"+grupoDe(p.ruc)]
         });
         m++; if(m > 12){ m = 1; a++; }
       }
@@ -438,10 +441,17 @@ function App(props){
   /* Meses propios cuyo vencimiento ya pasó y de los que no hay nada cargado:
      ni declaración ni deuda. No es que no se deba nada, es que no se sabe. */
   var huecos = useMemo(function(){
+    var hoy = mesDe(hoyISO());
+    var limite = hoy.anio*12 + hoy.mes - 2;   // dos meses atras
     return agenda.length === 0 ? [] : oblig.filter(function(o){
-      return esMio(o.p.ruc) && o.vigente && o.vence && dias(o.vence) < 0
-             && !(o.d && o.d.id);
-    }).sort(function(a,b){ return (a.vence < b.vence) ? -1 : 1; });
+      if(!esMio(o.p.ruc) || !o.vigente || (o.d && o.d.id)) return false;
+      if(o.vence) return dias(o.vence) < 0;
+      /* sin fecha de cronograma: si el periodo ya quedo atras, igual vencio */
+      return (o.anio*12 + o.mes) <= limite;
+    }).sort(function(a,b){
+      var x = a.anio*12+a.mes, y = b.anio*12+b.mes;
+      return x - y;
+    });
   },[oblig, esMio, agenda]);
 
   /* Y los RUC propios que no tienen ni un comprobante cargado: de esos no se
@@ -1233,9 +1243,11 @@ function FilaDecl(p){
         h("span",{style:{fontSize:14,fontWeight:600}}, o.p.nombre),
         h("span",{className:"hint"}, "  RUC "+o.p.ruc+" · grupo "+grupoDe(o.p.ruc)+
           " · "+plural(o.facturas,"factura","facturas"))),
-      h("div",{className:"mono",style:{fontSize:11,color:color}},
+      h("div",{className:"mono",style:{fontSize:11,
+          color: o.sinCronograma ? "var(--ambar)" : color}},
         o.vence ? ("vence "+o.vence+(d<0?" · vencida hace "+(-d)+"d":
-          d===0?" · hoy":" · faltan "+d+"d")) : "sin fecha")),
+          d===0?" · hoy":" · faltan "+d+"d"))
+          : "venció el mes siguiente · día por confirmar en SUNAT")),
 
     h("div",{className:"row",style:{marginTop:10,gap:8}},
       h(Paso,{t:"SIRE",hecho:o.sire,listo:true,
@@ -1892,6 +1904,12 @@ function Agenda(p){
                     return etiqMes(o.anio,o.mes) + " · " + o.p.nombre;
                   }).join("  ·  ") +
                   (p.huecos.length > 8 ? "  ·  y " + (p.huecos.length-8) + " más" : "")),
+                p.huecos.some(function(o){ return o.sinCronograma; })
+                  ? h("div",{className:"hint",style:{marginTop:5,
+                      color:"var(--ambar)"}},
+                      "Hay periodos de un año que no está en el cronograma cargado: "+
+                      "vencieron, pero el día exacto hay que confirmarlo en SUNAT.")
+                  : null,
                 h("div",{className:"hint",style:{marginTop:5}},
                   "No quiere decir que debas algo: quiere decir que no se sabe. ",
                   h("button",{className:"lk",
