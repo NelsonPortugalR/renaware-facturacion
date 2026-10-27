@@ -24,10 +24,10 @@ registro, calcula lo que se debe y avisa antes de que venza.
   queda como `fraccionada` y deja de contar; lo que se debe pasa a ser el nuevo
   cronograma. El aviso del Art. 36 sale sólo en fraccionamientos; una deuda de
   IGV vencida no se pierde, acumula interés moratorio.
-- **Emitir** — las reglas de emisión por par emisor-receptor, con alta de
-  reglas nuevas. No calcula: los montos vienen dados. La aritmética sigue en
-  `calcular()` porque la usa el formulario de facturas que vienen y el chequeo
-  del IGV mensual.
+- **Ajustes** — lo que se configura una vez: las reglas de emisión por par
+  emisor-receptor (alta y edición) y quién lleva la contabilidad de cada quien.
+  Las reglas no calculan nada acá: la aritmética vive en `calcular()`, que usan
+  el formulario de facturas que vienen y el chequeo del IGV mensual.
 - **Resumen** — facturado del año, pendiente por facturar, cuánto está trabado
   por falta de RUC, y declaraciones vencidas.
 - **Por facturar** — las comisiones pendientes agrupadas por asesor, separadas
@@ -74,6 +74,11 @@ registro, calcula lo que se debe y avisa antes de que venza.
   controla la fecha y si avisó que ya declaró.
 - Un NPS no es un pago. Se guarda como `estado = 'nps'` y sólo pasa a `pagado`
   con la constancia.
+- **La obligación mensual nace del RUC, no de haber facturado.** Quien tiene RUC
+  y no vendió igual presenta el 621 en cero; no presentarlo es multa aunque no
+  se deba nada. Por eso el mes se divide en "facturaron" y "declaran en cero".
+- La declaración anual la debe todo el que facturó en el ejercicio, aunque hoy
+  esté desactivado. Es otra obligación, no la suma de las mensuales.
 - Fraccionamiento Art. 36: tributo 8021, se paga con NPS o Form. 1662 citando
   el número de RI. Dos cuotas consecutivas impagas y se pierde.
 - Cronograma SUNAT por último dígito del RUC (`fact_vencimientos`).
@@ -116,7 +121,7 @@ el cotizador. Después de cualquier cambio:
 
 ```bash
 cd pruebas
-node prueba.js    # sintaxis + 132 aserciones de comportamiento en jsdom
+node prueba.js    # sintaxis + 142 aserciones de comportamiento en jsdom
 node ver.js       # render real en Chromium, escritorio y celular
 ```
 

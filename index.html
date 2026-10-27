@@ -358,11 +358,19 @@ function App(props){
       (porPersona[k] = porPersona[k] || []).push(f);
     });
     var out = [];
-    Object.keys(porPersona).forEach(function(pid){
-      var p = P[pid]; if(!p || !p.activo || !p.ruc) return;
-      var fs = porPersona[pid];
-      var prim = fs.map(function(f){ return f.fecha_emision; }).sort()[0];
-      var desde = p.factura_desde && p.factura_desde < prim ? p.factura_desde : prim;
+    /* La obligacion mensual no nace de facturar: nace de tener RUC. Quien no
+       vendio igual declara, en cero. Antes solo aparecian los que habian
+       emitido alguna factura y por eso en un mes salian diez de treinta y pico. */
+    personas.forEach(function(p){
+      if(!p.activo || !p.ruc) return;
+      var pid = p.id;
+      var fs = porPersona[pid] || [];
+      var prim = fs.length
+        ? fs.map(function(f){ return f.fecha_emision; }).sort()[0] : null;
+      var desde = p.factura_desde || prim;
+      if(p.factura_desde && prim && prim < p.factura_desde) desde = prim;
+      /* Sin fecha de inicio ni facturas no se sabe desde cuando declara. */
+      if(!desde) return;
       var a = +desde.slice(0,4), m = +desde.slice(5,7), guard = 0;
       while((a < hoy.anio || (a === hoy.anio && m <= hoy.mes)) && guard++ < 120){
         var mias = fs.filter(function(f){
@@ -378,7 +386,7 @@ function App(props){
         out.push({
           pid:pid, p:p, anio:a, mes:m, d:d, facturas:mias.length,
           netoCalc:netoCalc, igvCalc:igvCalc, renCalc:renCalc, igv:igv, renta:renta,
-          sire:!!d.sire_generado, pres:pres,
+          sire:!!d.sire_generado, pres:pres, enCero: mias.length === 0,
           igvPag:!!d.igv_pagado_en, renPag:!!d.renta_pagado_en,
           cerrada: pres && (igv<=0 || !!d.igv_pagado_en) && (renta<=0 || !!d.renta_pagado_en),
           vigente: !(a === hoy.anio && m === hoy.mes),
@@ -391,7 +399,7 @@ function App(props){
       }
     });
     return out;
-  },[emitidas,P,dmap,vmap]);
+  },[emitidas,personas,P,dmap,vmap]);
 
   var obPend = useMemo(function(){
     return oblig.filter(function(o){ return !o.cerrada && o.vigente; });
@@ -429,6 +437,8 @@ function App(props){
       out.push({
         k:"c|"+c.obligacion_id+"|"+c.numero, clase:o.tipo, cuota:c,
         mio: e.relacion === "propio",
+        grupo: e.relacion === "propio" ? "mio"
+             : grupoDe4(esMio, e.persona_id ? P[e.persona_id] : null),
         quien:e.nombre || "\u2014", ruc:e.ruc || null,
         que: o.tipo === "fraccionamiento"
           ? "Cuota " + c.numero + " de " + o.cuotas + " \u00b7 " + (o.referencia||"")
@@ -443,7 +453,7 @@ function App(props){
       if(!o.vence || o.vence < corte) return;
       out.push({
         k:"d|"+o.pid+"|"+o.anio+"|"+o.mes, clase:"declaracion",
-        mio: esMio(o.p.ruc),
+        mio: esMio(o.p.ruc), grupo: grupoDe4(esMio, o.p),
         quien:o.p.nombre, ruc:o.p.ruc,
         que: "Declarar " + etiqMes(o.anio,o.mes) + " \u00b7 " +
              (o.facturas ? plural(o.facturas,"factura","facturas") : "sin facturas"),
@@ -456,7 +466,7 @@ function App(props){
       return x < y ? -1 : (x > y ? 1 : 0);
     });
     return out;
-  },[emisores,obligs,cuotas,obPend,esMio]);
+  },[emisores,obligs,cuotas,obPend,esMio,P]);
 
   /* Meses propios cuyo vencimiento ya pasó y de los que no hay nada cargado:
      ni declaración ni deuda. No es que no se deba nada, es que no se sabe. */
@@ -530,6 +540,23 @@ function App(props){
                      d.anio===nueva.anio && d.mes===nueva.mes);
           });
           return otras.concat([nueva]);
+        });
+      });
+  }
+  function guardarAnual(pid, anio, patch){
+    var prev = dmap[pid+"|anual|"+anio+"|0"] || {};
+    var fila = Object.assign({persona_id:pid, tipo:"anual", anio:anio, mes:0},
+      prev.id ? {id:prev.id} : {}, patch);
+    return db.from("fact_declaraciones")
+      .upsert(fila,{onConflict:"persona_id,tipo,anio,mes"}).select()
+      .then(function(r){
+        if(r.error){ avisar("No se pudo guardar: " + r.error.message); return; }
+        var nueva = r.data[0];
+        setDecls(function(p){
+          return p.filter(function(d){
+            return !(d.persona_id===nueva.persona_id && d.tipo==="anual" &&
+                     d.anio===nueva.anio);
+          }).concat([nueva]);
         });
       });
   }
@@ -664,6 +691,15 @@ function App(props){
         return true;
       });
   }
+  function guardarContabilidad(pid, valor){
+    return db.from("eq_personas").update({contabilidad:valor}).eq("id",pid)
+      .select().then(function(r){
+        if(r.error){ avisar("No se pudo guardar: " + r.error.message); return false; }
+        setPersonas(function(prev){ return prev.map(function(x){
+          return x.id===pid ? Object.assign({}, x, r.data[0]) : x; }); });
+        return true;
+      });
+  }
   function guardarGasto(pid, anio, monto){
     return db.from("fact_gastos_anuales").upsert({
       persona_id:pid, anio:anio, gastos:Number(monto)||0,
@@ -699,7 +735,7 @@ function App(props){
     ["agenda","Agenda",atrasados,"var(--alerta)"],
     ["deudas","Deuda",deudasVencidas,"var(--alerta)"],
     ["facturar","Por facturar",borradores.length,"var(--detra)"],
-    ["emitir","Emitir",0,null],
+    ["ajustes","Ajustes",0,null],
     ["declaraciones","Declaraciones",obPend.length,
       vencidas.length?"var(--alerta)":"var(--ambar)"],
     ["padron","Padrón",0,null],
@@ -736,11 +772,12 @@ function App(props){
       vista==="agenda" ? h(Agenda,{agenda:agenda,riesgo:riesgo,huecos:huecos,
         rucsMudos:rucsMudos,marcarCuota:marcarCuota,ir:setVista}) : null,
       vista==="deudas" ? h(Deudas,{obligs:obligs,cuotas:cuotas,emisores:emisores,
-        pagos:pagos,esMio:esMio,marcarCuota:marcarCuota,
+        pagos:pagos,esMio:esMio,P:P,marcarCuota:marcarCuota,
         crear:crearObligacion,pagar:registrarPago,fraccionar:fraccionarDeuda}) : null,
-      vista==="emitir" ? h(Emitir,{emisores:emisores,receptores:receptores,
-        reglas:reglas,cfg:cfg,guardarRegla:guardarRegla,
-        actualizarRegla:actualizarRegla}) : null,
+      vista==="ajustes" ? h(Ajustes,{emisores:emisores,receptores:receptores,
+        reglas:reglas,cfg:cfg,personas:personas,esMio:esMio,
+        guardarRegla:guardarRegla,actualizarRegla:actualizarRegla,
+        guardarContabilidad:guardarContabilidad}) : null,
       vista==="resumen" ? h(Resumen,{personas:personas,emitidas:emitidas,
         borradores:borradores,totFact:totFact,totPend:totPend,sinRuc:sinRuc,
         oblig:oblig,obPend:obPend,vencidas:vencidas,ir:setVista}) : null,
@@ -749,10 +786,12 @@ function App(props){
         reglas:reglas,crear:crearPendiente,
         marcar:marcarFacturadas,desmarcar:desmarcar}) : null,
       vista==="declaraciones" ? h(Declaraciones,{oblig:oblig,esMio:esMio,
+        emitidas:emitidas,P:P,dmap:dmap,guardarAnual:guardarAnual,
         guardar:guardarDecl,guardarVarias:guardarVarias,avisar:avisar}) : null,
       vista==="padron" ? h(Padron,{personas:personas,facturas:facturas,
         guardar:guardarPersona}) : null,
       vista==="anual" ? h(Anual,{personas:personas,emitidas:emitidas,oblig:oblig,
+        esMio:esMio,
         gastos:gastos,cfg:cfg,guardarGasto:guardarGasto}) : null));
 }
 
@@ -834,6 +873,7 @@ function PorFacturar(p){
   var s4 = useState(false), verHechas = s4[0], setVerHechas = s4[1];
   var s5 = useState("con"), filtro = s5[0], setFiltro = s5[1];
   var s6 = useState(false), nueva = s6[0], setNueva = s6[1];
+  var s7 = useState("todas"), amb = s7[0], setAmb = s7[1];
 
   var todosGrupos = useMemo(function(){
     var g = {};
@@ -854,6 +894,16 @@ function PorFacturar(p){
   var tieneRuc = function(g){
     return !!((g.per && g.per.ruc) || g.fs[0].ruc);
   };
+  /* Dos ejes distintos: quién lleva la contabilidad, y si se le puede facturar
+     hoy. Uno no sustituye al otro. */
+  var ctaA = {mio:0, contador:0, externa:0, sin_definir:0};
+  todosGrupos.forEach(function(g){ ctaA[grupoDe4(p.esMio, g.per)]++; });
+  var totalA = todosGrupos.length;
+  todosGrupos = todosGrupos.filter(function(g){
+    var x = grupoDe4(p.esMio, g.per);
+    if(amb === "externa") return x === "externa" || x === "sin_definir";
+    return ambitoOk(amb, x);
+  });
   var conRuc = todosGrupos.filter(tieneRuc);
   var sinRuc = todosGrupos.filter(function(g){ return !tieneRuc(g); });
   var grupos = filtro === "con" ? conRuc : (filtro === "sin" ? sinRuc : todosGrupos);
@@ -914,6 +964,11 @@ function PorFacturar(p){
 
     verHechas ? h(YaFacturadas,{emitidas:p.emitidas,P:p.P,q:q,desmarcar:p.desmarcar}) :
     h("div",null,
+    h(Ambito,{valor:amb, set:setAmb, opciones:[
+      ["mio","Míos",ctaA.mio],
+      ["contador","Con el contador",ctaA.contador],
+      ["externa","Llevan por fuera",ctaA.externa + ctaA.sin_definir],
+      ["todas","Todos",totalA]]}),
     h(Ambito,{valor:filtro, set:setFiltro, opciones:[
       ["con","Con RUC",conRuc.length],
       ["sin","Sin RUC",sinRuc.length],
@@ -1144,20 +1199,7 @@ function YaFacturadas(p){
 function Declaraciones(p){
   var sAmb = useState("mio"), amb = sAmb[0], setAmb = sAmb[1];
   var esMio = p.esMio;
-  var cuenta = {mio:0, contador:0, externa:0, sin_definir:0};
-  p.oblig.forEach(function(o){ cuenta[grupoDe4(esMio, o.p)]++; });
-  var ambChips = h("div",null,
-    h(Ambito,{valor:amb, set:setAmb, opciones:[
-      ["mio","Mías",cuenta.mio],
-      ["contador","Con el contador",cuenta.contador],
-      ["externa","Llevan por fuera",cuenta.externa + cuenta.sin_definir],
-      ["todas","Todas",p.oblig.length]]}),
-    amb === "externa" && cuenta.sin_definir
-      ? h("div",{className:"hint",style:{marginTop:-8,marginBottom:14,
-          lineHeight:1.7,maxWidth:640}},
-          plural(cuenta.sin_definir,"persona","personas") + " sin definir quién le "+
-          "lleva la contabilidad; aparecen acá por defecto. Se marca en Padrón.")
-      : null);
+  var todasOblig = p.oblig;
   p = Object.assign({}, p, {oblig: p.oblig.filter(function(o){
     var g = grupoDe4(esMio, o.p);
     if(amb === "externa") return g === "externa" || g === "sin_definir";
@@ -1168,6 +1210,27 @@ function Declaraciones(p){
   var s1 = useState("matriz"), modo = s1[0], setModo = s1[1];
   var s2 = useState(claveMes(prev.anio, prev.mes)), per = s2[0], setPer = s2[1];
   var s3 = useState(""), q = s3[0], setQ = s3[1];
+
+  /* Los chips cuentan lo que se está mirando: si estás en un mes, cuentan ese
+     mes. Antes decían 176 (todo el año) junto a una lista de diez y no
+     cuadraba con nada. */
+  var baseChips = modo === "mes"
+    ? todasOblig.filter(function(o){ return claveMes(o.anio,o.mes) === per; })
+    : todasOblig;
+  var cuenta = {mio:0, contador:0, externa:0, sin_definir:0};
+  baseChips.forEach(function(o){ cuenta[grupoDe4(esMio, o.p)]++; });
+  var ambChips = h("div",null,
+    h(Ambito,{valor:amb, set:setAmb, opciones:[
+      ["mio","Mías",cuenta.mio],
+      ["contador","Con el contador",cuenta.contador],
+      ["externa","Llevan por fuera",cuenta.externa + cuenta.sin_definir],
+      ["todas","Todas",baseChips.length]]}),
+    amb === "externa" && cuenta.sin_definir
+      ? h("div",{className:"hint",style:{marginTop:-8,marginBottom:14,
+          lineHeight:1.7,maxWidth:640}},
+          plural(cuenta.sin_definir,"persona","personas") + " sin definir quién le "+
+          "lleva la contabilidad; aparecen acá por defecto. Se marca en Padrón.")
+      : null);
 
   if(!p.oblig.length) return h("div",null, ambChips,
     h(Vacio,{nota:"Nacen cuando un asesor con RUC tiene su primera factura emitida."},
@@ -1183,6 +1246,8 @@ function Declaraciones(p){
   });
   var resolver = delMes.filter(function(o){ return !o.cerrada; })
     .sort(function(a,b){ return (a.vence||"9999") < (b.vence||"9999") ? -1 : 1; });
+  var conVenta = resolver.filter(function(o){ return !o.enCero; });
+  var enCero   = resolver.filter(function(o){ return o.enCero; });
   var listas = delMes.filter(function(o){ return o.cerrada; });
   var sinSire = resolver.filter(function(o){ return !o.sire; });
   var porPres = resolver.filter(function(o){ return o.sire && !o.pres; });
@@ -1205,8 +1270,19 @@ function Declaraciones(p){
       h("input",{className:"in",style:{maxWidth:230},placeholder:"buscar…",
         value:q,onChange:function(e){ setQ(e.target.value); }})),
 
-    modo==="matriz" ? h(Matriz,{oblig:p.oblig,q:q,
-      ir:function(k){ setPer(k); setModo("mes"); }}) :
+    modo==="matriz" ? h("div",null,
+      h(Matriz,{oblig:p.oblig,q:q,esMio:p.esMio,
+        ir:function(k){ setPer(k); setModo("mes"); }}),
+      h(Anuales,{emitidas:p.emitidas,P:p.P,
+        dAnual:(function(){
+          var m = {};
+          Object.keys(p.dmap||{}).forEach(function(k){
+            var d = p.dmap[k];
+            if(d && d.tipo === "anual") m[d.persona_id+"|"+d.anio] = d;
+          });
+          return m;
+        })(),
+        guardarAnual:p.guardarAnual})) :
     h("div",null,
       enCurso ? h("div",{className:"card hint",style:{padding:"9px 13px",marginBottom:14}},
         "Mes en curso: se declara el mes siguiente. Aparece para que veas lo que "+
@@ -1233,10 +1309,41 @@ function Declaraciones(p){
         }},"Cerrar "+resolver.length+" · ya estaba hecho")) : null,
 
       !delMes.length ? h(Vacio,null,"Sin obligaciones en este mes.") : null,
-      resolver.map(function(o){
-        return h(FilaDecl,{key:o.pid+"|"+o.anio+"|"+o.mes,o:o,
-          esMio:p.esMio,guardar:p.guardar});
-      }),
+
+      /* Dos trabajos distintos: a quien facturó hay que declararle lo que
+         facturó; a quien no, una declaración en cero. Mezclarlos hacía que
+         los de cero parecieran olvidados. */
+      conVenta.length ? h("div",null,
+        h(Caps,null,"Facturaron · " + conVenta.length),
+        conVenta.map(function(o){
+          return h(FilaDecl,{key:o.pid+"|"+o.anio+"|"+o.mes,o:o,
+            esMio:p.esMio,guardar:p.guardar});
+        })) : null,
+
+      enCero.length ? h("div",{style:{marginTop: conVenta.length ? 18 : 0}},
+        h(Caps,null,"Sin facturar · declaran en cero · " + enCero.length),
+        h("div",{className:"hint",style:{marginTop:-4,marginBottom:10,
+          lineHeight:1.7,maxWidth:640}},
+          "No vendieron ese mes, pero tienen RUC: igual deben presentar el 621 "+
+          "en cero. No presentarlo es multa, aunque no se deba nada."),
+        enCero.filter(function(o){ return !o.pres; }).length
+          ? h("div",{className:"card row",style:{padding:"9px 13px",
+              marginBottom:10,gap:10}},
+              h("span",{className:"caps",style:{fontSize:9,color:"var(--ink40)",
+                margin:0}},"todas en cero"),
+              h("button",{className:"btn sm",onClick:function(){
+                var pend = enCero.filter(function(o){ return !o.pres; });
+                p.guardarVarias(pend,function(){
+                  return {sire_generado:true, presentada_en:hoyISO(),
+                    igv_real:0, renta_real:0}; })
+                 .then(function(){ p.avisar(pend.length+" presentadas en cero."); });
+              }},"Marcar " + enCero.filter(function(o){ return !o.pres; }).length +
+                 " como presentadas en cero"))
+          : null,
+        enCero.map(function(o){
+          return h(FilaDecl,{key:o.pid+"|"+o.anio+"|"+o.mes,o:o,
+            esMio:p.esMio,guardar:p.guardar});
+        })) : null,
       listas.length ? h("div",{style:{marginTop:18}},
         h(Caps,{color:"var(--verde)"},"Cerradas · "+listas.length),
         listas.map(function(o){
@@ -1258,6 +1365,91 @@ function Declaraciones(p){
         })) : null));
 }
 
+var ETIQ4 = {mio:"Míos", contador:"Con el contador",
+             externa:"Llevan por fuera", sin_definir:"Sin definir"};
+
+/* La declaración anual de renta es otra obligación, aparte de las mensuales:
+   la debe todo el que facturó en el ejercicio, aunque después se haya
+   desactivado. El día exacto sale del cronograma anual de SUNAT, que se
+   publica cada año por último dígito de RUC. */
+function Anuales(p){
+  var porAnio = useMemo(function(){
+    var m = {};
+    p.emitidas.forEach(function(f){
+      if(!f.persona_id) return;
+      var a = +f.fecha_emision.slice(0,4);
+      var k = a + "|" + f.persona_id;
+      m[k] = m[k] || {anio:a, pid:f.persona_id, n:0, neto:0};
+      m[k].n++; m[k].neto += Number(f.neto);
+    });
+    var por = {};
+    Object.keys(m).forEach(function(k){
+      var x = m[k];
+      (por[x.anio] = por[x.anio] || []).push(x);
+    });
+    return por;
+  },[p.emitidas]);
+
+  var anios = Object.keys(porAnio).sort().reverse();
+  if(!anios.length) return null;
+  var esteAnio = new Date().getFullYear();
+
+  return h("div",{style:{marginTop:26}},
+    h(Caps,null,"Declaración anual de renta"),
+    h("div",{className:"hint",style:{marginBottom:12,lineHeight:1.8,maxWidth:680}},
+      "La debe todo el que facturó en el ejercicio, aunque hoy esté desactivado "+
+      "o haya suspendido actividades. Se presenta al año siguiente, en marzo o "+
+      "abril, según el último dígito del RUC. ",
+      h("br",null),
+      "El día exacto sale del cronograma anual que SUNAT publica cada año; "+
+      "cuando lo tengas, se carga y aparece acá."),
+
+    anios.map(function(a){
+      var filas = porAnio[a].map(function(x){
+        var per = p.P[x.pid];
+        return Object.assign({}, x, {per:per,
+          d: p.dAnual[x.pid + "|" + a] || {}});
+      }).filter(function(x){ return !!x.per; })
+        .sort(function(u,v){ return v.neto - u.neto; });
+      if(!filas.length) return null;
+      var hechas = filas.filter(function(x){ return !!x.d.presentada_en; }).length;
+      var cerrado = +a < esteAnio;
+      return h("div",{key:a,className:"card",style:{marginBottom:12}},
+        h("div",{style:{padding:"11px 14px",borderBottom:"1px solid var(--rule)",
+            display:"flex",justifyContent:"space-between",gap:10,flexWrap:"wrap"}},
+          h("div",null,
+            h("div",{style:{fontSize:14,fontWeight:600}},"Ejercicio " + a),
+            h("div",{className:"hint",style:{marginTop:2}},
+              cerrado
+                ? "Cerrado · se presentó (o debió presentarse) en " + (+a + 1)
+                : "En curso · se presenta en " + (+a + 1))),
+          h("div",{className:"mono",style:{fontSize:12,
+              color: hechas === filas.length ? "var(--verde)" : "var(--ink40)"}},
+            hechas + " de " + filas.length + " presentadas")),
+        filas.map(function(x,i){
+          return h("div",{key:x.pid,style:{padding:"8px 14px",
+              borderTop: i ? "1px solid var(--rule)" : "none",
+              display:"flex",justifyContent:"space-between",gap:10,
+              alignItems:"center",flexWrap:"wrap"}},
+            h("div",{style:{flex:"1 1 220px"}},
+              h("div",{style:{fontSize:13}}, x.per.nombre,
+                x.per.activo ? null :
+                  h("span",{className:"hint"}," · inactivo, igual debe presentarla")),
+              h("div",{className:"hint"},
+                "RUC " + (x.per.ruc || "—") + " · " +
+                plural(x.n,"comprobante","comprobantes") + " · " + money(r2(x.neto)))),
+            h("button",{className:"btn sm " + (x.d.presentada_en ? "ok" : "sec"),
+              onClick:function(){
+                p.guardarAnual(x.pid, +a,
+                  {presentada_en: x.d.presentada_en ? null : hoyISO()});
+              }},
+              x.d.presentada_en
+                ? "✓ presentada el " + fechaCorta(x.d.presentada_en)
+                : (cerrado ? "marcar presentada" : "aún no toca")));
+        }));
+    }));
+}
+
 function Matriz(p){
   var gente = {};
   p.oblig.forEach(function(o){ if(coincide(o.p,p.q)) gente[o.pid] = o.p; });
@@ -1267,9 +1459,9 @@ function Matriz(p){
   var idx = {};
   p.oblig.forEach(function(o){ idx[o.pid+"|"+o.anio+"|"+o.mes] = o; });
 
-  /* La casilla muestra el dia en que vence esa declaracion. Antes decia solo
-     "vencida" y no servia para recordarle a nadie: el color dice el estado y
-     el numero dice hasta cuando. */
+  /* La casilla muestra el día en que vence esa declaración. Antes decía sólo
+     "vencida" y no servía para recordarle a nadie: el color dice el estado y
+     el número dice hasta cuándo. */
   function celda(o){
     if(!o) return {bg:"transparent",t:"·",c:"var(--rule)",ayuda:""};
     var dia = o.vence ? o.vence.slice(8,10) : "?";
@@ -1280,13 +1472,53 @@ function Matriz(p){
       ayuda:quien+" · mes en curso, se declara el mes que viene"};
     var d = o.vence ? dias(o.vence) : null;
     if(d === null) return {bg:"var(--ambar)",t:"?",c:"#fff",
-      ayuda:quien+" · hay que confirmar el dia en SUNAT"};
+      ayuda:quien+" · hay que confirmar el día en SUNAT"};
     if(d < 0) return {bg:"var(--alerta)",t:dia,c:"#fff",
-      ayuda:quien+" · vencida hace "+(-d)+" dias"};
+      ayuda:quien+" · vencida hace "+(-d)+" días"};
     if(!o.pres) return {bg:"var(--ambar)",t:dia,c:"#fff",
-      ayuda:quien+" · por declarar, faltan "+d+" dias"};
+      ayuda:quien+" · por declarar, faltan "+d+" días"};
     return {bg:"var(--detra)",t:dia,c:"#fff",ayuda:quien+" · declarada, falta pagar"};
   }
+
+  function fila(pid){
+    var per = gente[pid];
+    return h("tr",{key:pid,style:{borderTop:"1px solid var(--rule)"}},
+      h("td",{className:"sticky",style:{padding:"7px 12px",
+          borderRight:"1px solid var(--rule)"}},
+        h("div",{style:{fontSize:12,fontWeight:600,whiteSpace:"nowrap"}},
+          per.nombre.length>24 ? per.nombre.slice(0,24)+"…" : per.nombre),
+        h("div",{className:"hint"},"grupo "+grupoDe(per.ruc))),
+      MC.map(function(_,i){
+        var o = idx[pid+"|"+anio+"|"+(i+1)], c = celda(o);
+        return h("td",{key:i,style:{padding:0,textAlign:"center"}},
+          h("button",{className:"mono",disabled:!o,title:c.ayuda,
+            onClick:function(){ if(o) p.ir(claveMes(o.anio,o.mes)); },
+            style:{width:30,height:26,background:c.bg,color:c.c,border:0,
+              fontSize:10,opacity:o?1:.4,
+              cursor:o?"pointer":"default"}}, c.t));
+      }));
+  }
+
+  /* Agrupado por quién lleva la contabilidad: son listas con trabajos
+     distintos, y verlas revueltas no decía nada. */
+  var ORDEN = ["mio","contador","externa","sin_definir"];
+  var por = {};
+  ids.forEach(function(pid){
+    var g = grupoDe4(p.esMio, gente[pid]);
+    (por[g] = por[g] || []).push(pid);
+  });
+  var variosGrupos = Object.keys(por).length > 1;
+  var cuerpo = [];
+  ORDEN.forEach(function(g){
+    if(!por[g] || !por[g].length) return;
+    if(variosGrupos) cuerpo.push(h("tr",{key:"h"+g},
+      h("td",{className:"caps",colSpan:13,
+        style:{fontSize:9,color:"var(--ink40)",padding:"9px 12px",
+          borderTop:"1px solid var(--rule)",background:"var(--paper)"}},
+        ETIQ4[g] + " · " + plural(por[g].length,"persona","personas"))));
+    por[g].forEach(function(pid){ cuerpo.push(fila(pid)); });
+  });
+
   return h("div",null,
     h("div",{className:"hint",style:{marginBottom:10}},
       "El número de cada casilla es el día en que vence esa declaración. "+
@@ -1300,24 +1532,7 @@ function Matriz(p){
             return h("th",{key:i,className:"mono",
               style:{fontSize:10,color:"var(--ink40)",width:34,padding:"8px 0"}}, m);
           }))),
-        h("tbody",null, ids.map(function(pid){
-          var per = gente[pid];
-          return h("tr",{key:pid,style:{borderTop:"1px solid var(--rule)"}},
-            h("td",{className:"sticky",style:{padding:"7px 12px",
-                borderRight:"1px solid var(--rule)"}},
-              h("div",{style:{fontSize:12,fontWeight:600,whiteSpace:"nowrap"}},
-                per.nombre.length>24 ? per.nombre.slice(0,24)+"…" : per.nombre),
-              h("div",{className:"hint"},"grupo "+grupoDe(per.ruc))),
-            MC.map(function(_,i){
-              var o = idx[pid+"|"+anio+"|"+(i+1)], c = celda(o);
-              return h("td",{key:i,style:{padding:0,textAlign:"center"}},
-                h("button",{className:"mono",disabled:!o,title:c.ayuda,
-                  onClick:function(){ if(o) p.ir(claveMes(o.anio,o.mes)); },
-                  style:{width:30,height:26,background:c.bg,color:c.c,border:0,
-                    fontSize:10,opacity:o?1:.4,
-                    cursor:o?"pointer":"default"}}, c.t));
-            }));
-        })))),
+        h("tbody",null, cuerpo))),
     h("div",{className:"row mono",style:{fontSize:10,color:"var(--ink70)",
         marginTop:10,gap:14}},
       [["var(--verde)","17","cerrada"],["var(--ambar)","17","por declarar"],
@@ -1765,6 +1980,7 @@ function Ficha(p){
 
 /* ---------------------------------------------------------------- anual */
 function Anual(p){
+  var sA = useState("todas"), amb = sA[0], setAmb = sA[1];
   var anio = new Date().getFullYear();
   var uit = Number((p.cfg||{}).uit) || 5500;
   var gmap = {};
@@ -1820,6 +2036,15 @@ function Anual(p){
     }).filter(Boolean).sort(function(a,b){ return b.ing - a.ing; });
   },[p.emitidas,p.personas,p.gastos,p.oblig,uit,anio]);
 
+  var ctaA = {mio:0, contador:0, externa:0, sin_definir:0};
+  filas.forEach(function(f){ ctaA[grupoDe4(p.esMio, f.per)]++; });
+  var totalA = filas.length;
+  filas = filas.filter(function(f){
+    var x = grupoDe4(p.esMio, f.per);
+    if(amb === "externa") return x === "externa" || x === "sin_definir";
+    return ambitoOk(amb, x);
+  });
+
   var totIng = r2(filas.reduce(function(s,x){ return s+x.ing; },0));
   var totImp = r2(filas.reduce(function(s,x){ return s+x.imp; },0));
   var totSaldo = r2(filas.reduce(function(s,x){ return s+x.saldo; },0));
@@ -1836,6 +2061,11 @@ function Anual(p){
   };
 
   return h("div",null,
+    h(Ambito,{valor:amb, set:setAmb, opciones:[
+      ["mio","Míos",ctaA.mio],
+      ["contador","Con el contador",ctaA.contador],
+      ["externa","Llevan por fuera",ctaA.externa + ctaA.sin_definir],
+      ["todas","Todos",totalA]]}),
     h("div",{style:{display:"grid",gap:12,marginBottom:16,
         gridTemplateColumns:"repeat(auto-fit,minmax(190px,1fr))"}},
       h(Kpi,{l:"Ingreso neto "+anio,v:miles(totIng),
@@ -1942,9 +2172,8 @@ function Agenda(p){
 
   var delAmbito = useMemo(function(){
     return p.agenda.filter(function(f){
-      if(ambito === "mio") return f.mio;
-      if(ambito === "equipo") return !f.mio;
-      return true;
+      if(ambito === "externa") return f.grupo === "externa" || f.grupo === "sin_definir";
+      return ambitoOk(ambito, f.grupo || (f.mio ? "mio" : "externa"));
     });
   },[p.agenda, ambito]);
 
@@ -1954,8 +2183,9 @@ function Agenda(p){
     });
   },[delAmbito, todo]);
 
-  var nMio = p.agenda.filter(function(f){ return f.mio; }).length;
-  var nEquipo = p.agenda.length - nMio;
+  var cta = {mio:0, contador:0, externa:0, sin_definir:0};
+  p.agenda.forEach(function(f){
+    cta[f.grupo || (f.mio ? "mio" : "externa")]++; });
 
   var porBloque = {};
   filas.forEach(function(f){
@@ -1973,8 +2203,10 @@ function Agenda(p){
     p.marcarCuota(f.cuota, fpago).then(function(){ setMarcando(null); });
   }
 
-  var CHIPS = [["mio","Lo mío",nMio],["equipo","Del equipo",nEquipo],
-               ["todo","Todo",p.agenda.length]];
+  var CHIPS = [["mio","Lo mío",cta.mio],
+               ["contador","Con el contador",cta.contador],
+               ["externa","Llevan por fuera",cta.externa + cta.sin_definir],
+               ["todas","Todo",p.agenda.length]];
 
   return h("div",null,
     h("div",{className:"row",style:{gap:8,marginBottom:16}},
@@ -1984,7 +2216,7 @@ function Agenda(p){
           c[1], h("span",{style:{marginLeft:6,opacity:.6}}, c[2]));
       })),
 
-    ambito === "equipo" ? h("div",{className:"hint",style:{marginBottom:16,
+    ambito !== "mio" ? h("div",{className:"hint",style:{marginBottom:16,
         lineHeight:1.7,maxWidth:620}},
       "Las declaraciones del equipo figuran pendientes porque nunca se registraron, no porque estén sin hacer. Las que ya hiciste se cierran en bloque desde Declaraciones.") : null,
 
@@ -2020,7 +2252,7 @@ function Agenda(p){
       h("div",{className:"hint",style:{marginTop:6}},
         "Cuando aparezca una cuota o una declaración por vencer, sale en esta lista.")) : null,
 
-    ambito !== "equipo" && (p.huecos.length || p.rucsMudos.length)
+    (ambito === "mio" || ambito === "todas") && (p.huecos.length || p.rucsMudos.length)
       ? h("div",{className:"card",style:{padding:"12px 14px",marginBottom:20,
           borderColor:"var(--ambar)",borderLeftWidth:3}},
           h("div",{className:"caps",style:{fontSize:9,color:"var(--ambar)"}},
@@ -2147,6 +2379,97 @@ function calcular(regla, neto, cfg){
           renta: r2(n * (cfg ? Number(cfg.renta) : 0.01))};
 }
 
+/* ---------------------------------------------------------------- ajustes */
+/* Lo que se configura una vez y casi no se toca: las reglas de emisión y
+   quién lleva la contabilidad de cada quien. */
+
+function Ajustes(p){
+  var s1 = useState("reglas"), sec = s1[0], setSec = s1[1];
+  var SECS = [["reglas","Reglas de emisión"],["contabilidad","Contabilidad"]];
+  return h("div",null,
+    h("div",{className:"row",style:{gap:8,marginBottom:18}},
+      SECS.map(function(x){
+        return h("button",{key:x[0],className:"chip"+(sec===x[0]?" on":""),
+          onClick:function(){ setSec(x[0]); }}, x[1]);
+      })),
+    sec === "reglas" ? h(Emitir,p) : h(QuienLleva,p));
+}
+
+function QuienLleva(p){
+  var s1 = useState(""), q = s1[0], setQ = s1[1];
+  var s2 = useState("todas"), ver = s2[0], setVer = s2[1];
+
+  var conRuc = useMemo(function(){
+    return p.personas.filter(function(x){ return x.activo && x.ruc; })
+      .sort(function(a,b){ return a.nombre < b.nombre ? -1 : 1; });
+  },[p.personas]);
+
+  var cta = {mio:0, contador:0, externa:0, sin_definir:0};
+  conRuc.forEach(function(x){ cta[grupoDe4(p.esMio, x)]++; });
+
+  var lista = conRuc.filter(function(x){
+    if(!coincide(x, q)) return false;
+    var g = grupoDe4(p.esMio, x);
+    if(ver === "externa") return g === "externa" || g === "sin_definir";
+    return ambitoOk(ver, g);
+  });
+
+  return h("div",null,
+    h("div",{className:"hint",style:{marginBottom:14,lineHeight:1.8,maxWidth:680}},
+      "Quién lleva la contabilidad decide cuánto dato se le puede pedir a cada uno. ",
+      "Del grupo del contador recomendado vamos a tener las casillas del 0621; ",
+      "de los que la llevan por fuera, sólo la fecha y el aviso de que declararon. ",
+      h("br",null),
+      "Los RUC propios no se cambian desde acá: salen de ser emisores propios."),
+
+    h(Ambito,{valor:ver, set:setVer, opciones:[
+      ["contador","Con el contador",cta.contador],
+      ["externa","Llevan por fuera",cta.externa + cta.sin_definir],
+      ["mio","Míos",cta.mio],
+      ["todas","Todos",conRuc.length]]}),
+
+    h("input",{className:"in",style:{maxWidth:280,marginBottom:14},
+      placeholder:"buscar nombre, RUC o código…",
+      value:q,onChange:function(e){ setQ(e.target.value); }}),
+
+    !lista.length ? h(Vacio,null,"Nadie en este grupo.") :
+    h("div",{className:"card",style:{overflowX:"auto"}},
+      h("table",null,
+        h("thead",null,h("tr",null,
+          ["Persona","RUC","Quién le lleva la contabilidad"].map(function(t,i){
+            return h("th",{key:i,style:{textAlign:"left",padding:"9px 12px",
+              borderBottom:"1px solid var(--rule)",font:"9px/1 var(--mono)",
+              textTransform:"uppercase",letterSpacing:".12em",
+              color:"var(--ink40)",whiteSpace:"nowrap"}}, t); }))),
+        h("tbody",null, lista.map(function(x){
+          var g = grupoDe4(p.esMio, x);
+          return h("tr",{key:x.id},
+            h("td",{style:{padding:"8px 12px",borderTop:"1px solid var(--rule)",
+              fontSize:12}}, x.nombre,
+              h("div",{className:"hint"}, x.codigo_asesor || "sin código")),
+            h("td",{className:"mono",style:{padding:"8px 12px",
+              borderTop:"1px solid var(--rule)",fontSize:11}}, x.ruc),
+            h("td",{style:{padding:"6px 12px",borderTop:"1px solid var(--rule)"}},
+              g === "mio"
+                ? h("span",{className:"mono hint"},"propio · no se cambia acá")
+                : h("select",{className:"in",style:{maxWidth:240,fontSize:13,
+                      padding:"5px 8px"},
+                    value:x.contabilidad || "",
+                    onChange:function(e){
+                      p.guardarContabilidad(x.id, e.target.value || null);
+                    }},
+                    h("option",{value:""},"— sin definir —"),
+                    h("option",{value:"contador"},"El contador recomendado"),
+                    h("option",{value:"externa"},"La lleva por fuera"))));
+        })))),
+
+    cta.sin_definir ? h("div",{className:"hint",style:{marginTop:12,
+        color:"var(--ambar)"}},
+      plural(cta.sin_definir,"persona","personas") + " sin definir. Mientras tanto "+
+      "se las trata como si llevaran la contabilidad por fuera: se les controla "+
+      "la fecha y nada más.") : null);
+}
+
 function Emitir(p){
   var s1 = useState(false), abierta = s1[0], setAbierta = s1[1];
   var VACIA = {emisor_id:"", receptor_id:"", tipo_comprobante:"factura",
@@ -2234,7 +2557,7 @@ function Emitir(p){
       "según el receptor y si hay retención. De acá salen los cálculos de Por facturar."),
 
     h(Ambito,{valor:amb, set:setAmb, opciones:[
-      ["mio","Mías",nMias], ["equipo","Del equipo",p.reglas.length-nMias],
+      ["mio","Mías",nMias], ["equipo","De los asesores",p.reglas.length-nMias],
       ["todas","Todas",p.reglas.length]]}),
 
     h("div",{className:"card",style:{overflowX:"auto"}},
@@ -2656,16 +2979,24 @@ function Deudas(p){
     return (p.pagos||[]).filter(function(x){ return x.obligacion_id === id; });
   };
 
-  var nMias = grupos.filter(function(g){ return p.esMio(g.e.ruc); }).length;
+  var grupoG = function(g){
+    return p.esMio(g.e.ruc) ? "mio"
+      : grupoDe4(p.esMio, g.e.persona_id ? p.P[g.e.persona_id] : null);
+  };
+  var cta = {mio:0, contador:0, externa:0, sin_definir:0};
+  grupos.forEach(function(g){ cta[grupoG(g)]++; });
+  var nMias = cta.mio;
   var todos = grupos;
   grupos = grupos.filter(function(g){
-    if(amb === "mio") return p.esMio(g.e.ruc);
-    if(amb === "equipo") return !p.esMio(g.e.ruc);
-    return true;
+    var x = grupoG(g);
+    if(amb === "externa") return x === "externa" || x === "sin_definir";
+    return ambitoOk(amb, x);
   });
 
   var CHIPS = h(Ambito,{valor:amb, set:setAmb, opciones:[
-    ["mio","Mías",nMias], ["equipo","Del equipo",todos.length-nMias],
+    ["mio","Mías",cta.mio],
+    ["contador","Con el contador",cta.contador],
+    ["externa","Llevan por fuera",cta.externa + cta.sin_definir],
     ["todas","Todas",todos.length]]});
 
   if(!todos.length) return h(Vacio,{nota:"Los fraccionamientos y el IGV prorrogado se cargan en fact_obligaciones."},
@@ -2682,14 +3013,17 @@ function Deudas(p){
   }
 
   var enAmbito = function(g){
-    if(amb === "mio") return p.esMio(g.e.ruc);
-    if(amb === "equipo") return !p.esMio(g.e.ruc);
-    return true;
+    var x = grupoG(g);
+    if(amb === "externa") return x === "externa" || x === "sin_definir";
+    return ambitoOk(amb, x);
   };
   var res = resueltas.filter(enAmbito);
   var emisoresAmb = p.emisores.filter(function(e){
-    return e.activo && (amb === "todas" ||
-      (amb === "mio" ? p.esMio(e.ruc) : !p.esMio(e.ruc)));
+    if(!e.activo) return false;
+    var x = p.esMio(e.ruc) ? "mio"
+      : grupoDe4(p.esMio, e.persona_id ? p.P[e.persona_id] : null);
+    if(amb === "externa") return x === "externa" || x === "sin_definir";
+    return ambitoOk(amb, x);
   });
 
   return h("div",null,

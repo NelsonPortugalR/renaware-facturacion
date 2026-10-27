@@ -226,7 +226,7 @@ setTimeout(async () => {
   ok("entra con sesión activa (no muestra login)", !/Contraseña/.test(T));
   ok("muestra el correo de la sesión", /prueba@equipo\.pe/.test(T));
   ok("renderiza las 8 pestañas",
-    ["Agenda","Deuda","Por facturar","Emitir","Declaraciones","Padrón","Anual","Resumen"]
+    ["Agenda","Deuda","Por facturar","Ajustes","Declaraciones","Padrón","Anual","Resumen"]
       .every(t => T.indexOf(t) >= 0));
 
   /* --- agenda: arranca acá, es la pantalla de cero multas --- */
@@ -244,7 +244,8 @@ setTimeout(async () => {
 
   /* --- la agenda arranca en lo propio: las declaraciones del equipo no
          pueden tapar las deudas de Nelson (eran 108 contra 2) --- */
-  ok("ofrece los tres ámbitos", /Lo mío/.test(T) && /Del equipo/.test(T) && /Todo/.test(T));
+  ok("ofrece los cuatro grupos", /Lo mío/.test(T) && /Con el contador/.test(T) &&
+    /Llevan por fuera/.test(T) && /Todo/.test(T));
   ok("en lo propio no se cuela ninguna declaración del equipo",
     !/ANA PRUEBA UNO/.test(T) && !/BEA PRUEBA DOS/.test(T),
     "se coló alguien del equipo");
@@ -277,12 +278,12 @@ setTimeout(async () => {
     b.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
     await pausa(60);
   };
-  await chip("Del equipo");
+  await chip("Llevan por fuera");
   const TQ = txt();
-  ok("el ámbito del equipo sí trae las declaraciones", /Declarar/.test(TQ));
+  ok("el ámbito de afuera sí trae sus declaraciones", /Declarar/.test(TQ));
   ok("y explica por qué figuran pendientes", /nunca se registraron/.test(TQ));
-  ok("el ámbito del equipo no repite las deudas propias", !/Cuota 1 de 9/.test(TQ));
-  ok("el ámbito del equipo no trae lo propio", !/PORTUGAL PRUEBA/.test(TQ));
+  ok("no repite las deudas propias", !/Cuota 1 de 9/.test(TQ));
+  ok("no trae lo propio", !/PORTUGAL PRUEBA/.test(TQ));
   await chip("Lo mío");
 
   /* --- cálculo del comprobante: la aritmética que debe cuadrar al céntimo --- */
@@ -335,7 +336,7 @@ setTimeout(async () => {
   /* --- deuda: el cronograma entero, pagado y no pagado --- */
   await irA("Deuda");
   const TD = txt();
-  ok("deuda arranca en lo mío", /Mías/.test(TD) && /Del equipo/.test(TD));
+  ok("deuda arranca en lo mío", /Mías/.test(TD) && /Llevan por fuera/.test(TD));
   ok("deudas: saldo total 2,530", TD.indexOf("S/ 2,530") >= 0);
   ok("deudas: vencido sin pagar 2,233", TD.indexOf("S/ 2,233") >= 0);
   ok("deudas: lista las dos obligaciones",
@@ -388,12 +389,15 @@ setTimeout(async () => {
     }
   }
 
-  /* --- emitir: ya no calcula, administra las reglas --- */
-  await irA("Emitir");
+  /* --- ajustes: reglas y quién lleva la contabilidad --- */
+  await irA("Ajustes");
   const TE = txt();
+  ok("ajustes tiene las dos secciones",
+    /Reglas de emisión/.test(TE) && /Contabilidad/.test(TE));
   ok("emitir ya no trae la calculadora",
     !/Cae al banco/.test(TE) && !/Neto \(sin IGV\)/.test(TE));
-  ok("emitir separa mías del equipo", /Mías/.test(TE) && /Del equipo/.test(TE));
+  ok("emitir separa mías de las de los asesores",
+    /Mías/.test(TE) && /De los asesores/.test(TE));
   ok("emitir lista las reglas propias", /Portugal Research International/.test(TE));
   ok("emitir muestra la detracción de Bros al 12%", /12% siempre/.test(TE));
   ok("emitir muestra el umbral de Rena Ware", /10% > 700/.test(TE));
@@ -431,6 +435,21 @@ setTimeout(async () => {
     ok("el umbral no se pregunta sin detracción", !/sin importar el monto/.test(TF));
     ok("el formulario ofrece el recibo por honorarios",
       /Recibo por honorarios/.test(TF));
+  }
+
+  /* quién lleva la contabilidad de cada uno */
+  {
+    const b = [...doc.querySelectorAll("button.chip")]
+      .find(x => x.textContent === "Contabilidad");
+    b.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await pausa(80);
+    const TC = txt();
+    ok("lista a quienes tienen RUC", /ANA PRUEBA UNO/.test(TC));
+    ok("ofrece elegir quién le lleva la contabilidad",
+      /El contador recomendado/.test(TC) && /La lleva por fuera/.test(TC));
+    ok("los propios no se cambian desde ahí", /no se cambia acá/.test(TC));
+    ok("explica para qué sirve la distinción",
+      /sólo la fecha y el aviso de que declararon/.test(TC));
   }
 
   /* --- resumen: totales ---
@@ -492,8 +511,24 @@ setTimeout(async () => {
   ok("arma la matriz del año", /grupo 1/.test(T3) || /grupo 9/.test(T3));
   ok("incluye a quien tiene RUC", /ANA PRUEBA UNO/.test(T3));
   ok("excluye a quien no tiene RUC", !/BEA PRUEBA DOS/.test(T3));
-  ok("excluye a la inactiva de las obligaciones mensuales",
-    !/CARLA PRUEBA TRES/.test(T3));
+  {
+    const mtz = doc.querySelector("table.matriz");
+    const TM = mtz ? mtz.textContent.replace(/\s+/g, " ") : "";
+    ok("excluye a la inactiva de las obligaciones mensuales",
+      !/CARLA PRUEBA TRES/.test(TM));
+  }
+
+  /* la anual es otra obligación: la debe hasta quien ya no está activo */
+  ok("muestra la declaración anual de renta",
+    /Declaración anual de renta/.test(T3));
+  ok("la anual incluye a la inactiva que facturó",
+    /CARLA PRUEBA TRES/.test(T3));
+  ok("la anual dice que igual debe presentarla",
+    /igual debe presentarla/.test(T3));
+  ok("la anual separa ejercicio cerrado del que está en curso",
+    /Cerrado/.test(T3) && /En curso/.test(T3));
+  ok("la anual admite que el día exacto lo pone SUNAT",
+    /cronograma anual que SUNAT publica/.test(T3));
   ok("tiene leyenda de estados",
     /cerrada/.test(T3) && /vencida/.test(T3) && /mes en curso/.test(T3));
 
