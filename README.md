@@ -16,11 +16,14 @@ registro, calcula lo que se debe y avisa antes de que venza.
   cien y tapaban por completo las dos deudas propias. "Mío" es lo que emiten
   los RUC con `relacion = 'propio'`. Las declaraciones de hace más de 60 días
   no entran: son el atraso histórico y se cierran en bloque desde su pestaña.
-- **Mis deudas** — cada fraccionamiento y cada IGV prorrogado con su
-  cronograma entero: qué cuota se pagó y cuándo, cuál está vencida, cuánto
-  falta. Se marca pagada (y se deshace) desde ahí. El aviso del Art. 36 sale
-  sólo en fraccionamientos; una deuda de IGV vencida no se pierde, acumula
-  interés moratorio.
+- **Deuda** — cada fraccionamiento y cada IGV con su cronograma entero: qué
+  cuota se pagó y cuándo, cuál está vencida, cuánto falta. Desde ahí se agrega
+  una deuda, se registra un pago (NPS, 1662, **cuenta de detracción**, tarjeta,
+  al presentar) y se **fracciona el saldo**: el cronograma del RI se pega tal
+  cual del PDF y se muestra lo entendido antes de guardar. La deuda original
+  queda como `fraccionada` y deja de contar; lo que se debe pasa a ser el nuevo
+  cronograma. El aviso del Art. 36 sale sólo en fraccionamientos; una deuda de
+  IGV vencida no se pierde, acumula interés moratorio.
 - **Emitir** — las reglas de emisión por par emisor-receptor, con alta de
   reglas nuevas. No calcula: los montos vienen dados. La aritmética sigue en
   `calcular()` porque la usa el formulario de facturas que vienen y el chequeo
@@ -32,7 +35,9 @@ registro, calcula lo que se debe y avisa antes de que venza.
   trabajo). Arriba dice hasta qué semana llega el reporte de Aurora. Lo propio
   ya no sale de ese reporte: se anota a mano con "agregar una factura que
   viene", que calcula detracción y retención con la regla del par.
-- **Declaraciones** — matriz del año y vista mes a mes, con filtro mías/equipo:
+- **Declaraciones** — matriz del año y vista mes a mes. Cada casilla de la
+  matriz muestra **el día en que vence** esa declaración, no sólo el estado:
+  sin eso no sirve para recordarle a nadie. Cuatro grupos:
   SIRE → presentar el 621 → pagar IGV (1011) y renta (3121) por separado.
   Cada mes abre el **detalle del 0621**: ventas e IGV precargados de las
   facturas, y de la constancia del contador las compras, el crédito fiscal
@@ -63,7 +68,12 @@ registro, calcula lo que se debe y avisa antes de que venza.
 - Una factura anulada no se borra: se declaró, y lo que la cancela es la nota
   de crédito, que entra en negativo. Excluirla además sería restar dos veces.
 - "Mío" sale de `fact_emisores.relacion = 'propio'`, no de una lista en el
-  código: Portugal Research, el RUC 10 de Nelson y su esposa.
+  código: Portugal Research, el RUC 10 de Nelson, su esposa y su suegro.
+- De quien lleva la contabilidad por fuera (`eq_personas.contabilidad`) no se
+  piden las casillas del 0621: no vamos a tener ese dato. Con esa gente sólo se
+  controla la fecha y si avisó que ya declaró.
+- Un NPS no es un pago. Se guarda como `estado = 'nps'` y sólo pasa a `pagado`
+  con la constancia.
 - Fraccionamiento Art. 36: tributo 8021, se paga con NPS o Form. 1662 citando
   el número de RI. Dos cuotas consecutivas impagas y se pierde.
 - Cronograma SUNAT por último dígito del RUC (`fact_vencimientos`).
@@ -106,7 +116,7 @@ el cotizador. Después de cualquier cambio:
 
 ```bash
 cd pruebas
-node prueba.js    # sintaxis + 108 aserciones de comportamiento en jsdom
+node prueba.js    # sintaxis + 132 aserciones de comportamiento en jsdom
 node ver.js       # render real en Chromium, escritorio y celular
 ```
 

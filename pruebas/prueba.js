@@ -21,7 +21,8 @@ const personas = [
   { id: "p1", nombre: "ANA PRUEBA UNO", codigo_asesor: "1001", ruc: "10296091861",
     cuenta_detraccion: "00401268464", cci: null, banco: "BCP", cuenta_bancaria: "123",
     codigo_division: "wv08", factura_desde: ANIO + "-06-01", regimen: "RMT",
-    activo: true, celular: null, correo: null, notas: null },
+    activo: true, celular: null, correo: null, notas: null,
+    contabilidad: "externa" },   // lleva su contabilidad por fuera
   // sin RUC: su comisión pendiente debe contar como trabada
   { id: "p2", nombre: "BEA PRUEBA DOS", codigo_asesor: "1002", ruc: null,
     cuenta_detraccion: null, cci: null, banco: null, cuenta_bancaria: null,
@@ -118,6 +119,12 @@ const obligaciones = [
   { id: "o2", emisor_id: EMI_PRI, tipo: "deuda_igv", referencia: "junio 2026",
     descripcion: "IGV prorrogado", monto_total: 1931, cuotas: 1 }
 ];
+/* como en la realidad: parte del IGV se pagó con la cuenta de detracciones */
+const pagos = [
+  { id: "g1", obligacion_id: "o2", cuota_numero: null, ruc: "20600022653",
+    anio: 2026, mes: 6, tributo: "1011", monto: 383, estado: "pagado",
+    fecha_pago: AYER, medio: "detraccion", referencia: null }
+];
 const cuotas = [
   { obligacion_id: "o1", numero: 1, vence: AYER,   monto: 302,  pagada_en: null },
   { obligacion_id: "o1", numero: 2, vence: PRONTO, monto: 297,  pagada_en: null },
@@ -135,6 +142,7 @@ const TABLAS = {
   fact_reglas_emision: reglas,
   fact_obligaciones: obligaciones,
   fact_obligacion_cuotas: cuotas,
+  fact_pagos: pagos,
   fact_config: { id: "vigente", igv: 0.18, detraccion: 0.10,
     detraccion_umbral: 700, renta: 0.01, uit: 5500 }
 };
@@ -346,6 +354,40 @@ setTimeout(async () => {
   ok("deudas: deja marcar una cuota como pagada",
     [...doc.querySelectorAll("button.btn.sec.sm")].some(b => b.textContent === "pagada"));
 
+  /* lo que pidió Nelson: cargar deudas, pagarlas por varios medios y
+     fraccionar el saldo */
+  ok("deuda: deja agregar una deuda nueva", /agregar una deuda/.test(TD));
+  ok("deuda: deja registrar un pago", /registrar un pago/.test(TD));
+  ok("deuda: deja fraccionar el saldo", /fraccionar el saldo/.test(TD));
+  ok("deuda: muestra el pago hecho con la cuenta de detracción",
+    /Cuenta de detracción/.test(TD));
+  ok("deuda: dice cuánto queda por cubrir tras el pago parcial",
+    /Queda S\/ 1,548.00 por cubrir/.test(TD));
+
+  /* el cronograma del RI se pega tal cual del PDF: esto es lo que más fácil
+     se rompe, así que va fijado contra las líneas reales */
+  {
+    const leer = dom.window.leerCronograma;
+    ok("expone leerCronograma()", typeof leer === "function");
+    if (typeof leer === "function") {
+      const cs = leer("1 30/11/2026 306.00 14.00 320.00 1,243.00\n" +
+                      "2 31/12/2026 308.00 9.00 317.00 935.00\n" +
+                      "5 31/03/2027 313.00 2.00 315.00 0.00");
+      ok("lee las tres cuotas pegadas", cs.length === 3, "leyó " + cs.length);
+      ok("toma el total de la cuota, no la amortización",
+        cs[0].monto === 320, "tomó " + (cs[0] || {}).monto);
+      ok("convierte la fecha a ISO", cs[0].vence === "2026-11-30",
+        "dio " + (cs[0] || {}).vence);
+      ok("respeta el número de cuota del PDF", cs[2].numero === 5);
+      ok("no se come el separador de miles", cs[1].monto === 317);
+      ok("ignora las líneas sin fecha", leer("Cuota Saldo\nN Vencimiento").length === 0);
+      /* formato corto, por si lo tipea a mano */
+      const corto = leer("1 30/11/2026 320.00");
+      ok("también entiende número, fecha y monto", corto.length === 1 &&
+        corto[0].monto === 320);
+    }
+  }
+
   /* --- emitir: ya no calcula, administra las reglas --- */
   await irA("Emitir");
   const TE = txt();
@@ -357,6 +399,25 @@ setTimeout(async () => {
   ok("emitir muestra el umbral de Rena Ware", /10% > 700/.test(TE));
   ok("emitir muestra la retención del recibo", /8%/.test(TE));
   ok("emitir ofrece cargar una regla nueva", /cargar nueva regla/.test(TE));
+  ok("emitir deja editar una regla existente",
+    [...doc.querySelectorAll("button.lk")].some(x => x.textContent === "editar"));
+  {
+    const ed = [...doc.querySelectorAll("button.lk")]
+      .find(x => x.textContent === "editar");
+    ed.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await pausa(80);
+    const TD2 = txt();
+    ok("al editar dice que está editando", /Editar regla/.test(TD2));
+    ok("al editar no deja cambiar el par emisor-receptor",
+      /par emisor-receptor no se cambia/.test(TD2));
+    const sel = [...doc.querySelectorAll("select")].filter(x => x.disabled);
+    ok("y los selectores quedan bloqueados", sel.length >= 2,
+      "bloqueados: " + sel.length);
+    const cancelar = [...doc.querySelectorAll("button.lk")]
+      .find(x => x.textContent === "cancelar");
+    cancelar.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await pausa(60);
+  }
   {
     const b = [...doc.querySelectorAll("button.btn.sec")]
       .find(x => x.textContent === "cargar nueva regla");
@@ -435,6 +496,33 @@ setTimeout(async () => {
     !/CARLA PRUEBA TRES/.test(T3));
   ok("tiene leyenda de estados",
     /cerrada/.test(T3) && /vencida/.test(T3) && /mes en curso/.test(T3));
+
+  /* lo que pidió Nelson: la matriz tiene que decir hasta cuándo, no sólo que
+     está vencida */
+  ok("la matriz explica que el número es el día de vencimiento",
+    /número de cada casilla es el día en que vence/.test(T3));
+  ok("las casillas muestran el día", /\b1[6-9]\b|\b2[0-3]\b/.test(T3));
+
+  /* cuatro grupos según quién lleva la contabilidad */
+  ok("declaraciones separa los cuatro grupos",
+    /Mías/.test(T3) && /Con el contador/.test(T3) &&
+    /Llevan por fuera/.test(T3) && /Todas/.test(T3));
+
+  /* a quien lleva la contabilidad por fuera sólo se le controla la fecha */
+  {
+    const mes = [...doc.querySelectorAll("button.chip")]
+      .find(x => x.textContent.indexOf("Trabajar un mes") === 0);
+    mes.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await pausa(80);
+    const TX = txt();
+    ok("al de afuera sólo se le pregunta si avisó",
+      /avisó que ya declaró/.test(TX));
+    ok("y se dice por qué", /Lleva la contabilidad por fuera/.test(TX));
+    const volver = [...doc.querySelectorAll("button.chip")]
+      .find(x => x.textContent.indexOf("Año completo") === 0);
+    volver.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await pausa(60);
+  }
 
   /* --- el detalle del 0621: lo que se declara mes a mes --- */
   {
