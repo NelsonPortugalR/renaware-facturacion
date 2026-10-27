@@ -383,6 +383,41 @@ setTimeout(async () => {
   ok("tiene leyenda de estados",
     /cerrada/.test(T3) && /vencida/.test(T3) && /mes en curso/.test(T3));
 
+  /* --- el detalle del 0621: lo que se declara mes a mes --- */
+  {
+    const tabs = [...doc.querySelectorAll("button.chip")];
+    const mes = tabs.find(x => x.textContent.indexOf("Trabajar un mes") === 0);
+    mes.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await pausa(80);
+    const abrir = [...doc.querySelectorAll("button.lk")]
+      .find(x => x.textContent === "detalle del 0621");
+    ok("cada mes ofrece el detalle del 0621", !!abrir);
+    if (abrir) {
+      abrir.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+      await pausa(80);
+      const TF = txt();
+      ok("pide las casillas del IGV",
+        /Ventas sin IGV \(100\)/.test(TF) && /Crédito fiscal \(178\)/.test(TF)
+        && /IGV a pagar \(188\)/.test(TF));
+      ok("pide el saldo a favor de los dos meses",
+        /Saldo a favor anterior \(145\)/.test(TF) &&
+        /Saldo a favor siguiente \(184\)/.test(TF));
+      ok("pide la renta y su retención",
+        /Ingresos netos \(301\)/.test(TF) && /Pago a cuenta \(324\)/.test(TF)
+        && /Retención 4ta \(3042\)/.test(TF));
+      ok("aclara que la 4ta va en el PLAME", /PLAME/.test(TF));
+      ok("pide los otros gastos y aclara que no repiten compras",
+        /Otros gastos/.test(TF) && /No repite las compras/.test(TF));
+      ok("precarga las ventas desde las facturas", /de tus facturas/.test(TF));
+      ok("ofrece el IGV prorrogado", /IGV Justo/.test(TF));
+      ok("pregunta de dónde salió el dato", /Constancia \+ detalle/.test(TF));
+      /* ANA tiene 1000 de neto en junio -> IGV 180, renta 10.
+         Con crédito fiscal vacío el chequeo no corre; el de renta sí. */
+      ok("chequea la renta contra el 1% de los ingresos",
+        /1% de los ingresos netos/.test(TF));
+    }
+  }
+
   /* --- padrón --- */
   await irA("Padrón");
   const T4 = txt();
@@ -403,9 +438,17 @@ setTimeout(async () => {
     /obligatoria/.test(T5));
   ok("muestra la UIT vigente", /5,500/.test(T5));
 
-  ok("saldo por regularizar descuenta los pagos a cuenta",
-    T5.indexOf("S/ 215") >= 0);
-  ok("anual cuenta sólo a quienes facturaron", /2 asesores/.test(T5));
+  /* El saldo descuenta sólo los pagos a cuenta PAGADOS. En las pruebas no hay
+     ninguno pagado, así que no descuenta nada: 230, no 215. Un 0621 presentado
+     no es un pago. */
+  ok("el saldo no descuenta lo declarado pero no pagado",
+    T5.indexOf("S/ 230") >= 0);
+  ok("avisa de los pagos a cuenta declarados y no pagados",
+    /declarados pero no pagados/.test(T5));
+  ok("anual cuenta sólo a quienes facturaron", /2 contribuyentes/.test(T5));
+  ok("anual avisa de los meses sin compras cargadas",
+    /sin compras ni gastos cargados/.test(T5));
+  ok("anual dice que no se escribe nada ahí", /no se escribe nada/.test(T5));
 
   /* --- resultado --- */
   console.log("pruebas: " + n + " · fallas: " + fallas.length);

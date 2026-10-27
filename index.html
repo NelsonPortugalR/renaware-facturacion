@@ -347,6 +347,7 @@ function App(props){
           return +f.fecha_emision.slice(0,4) === a && +f.fecha_emision.slice(5,7) === m;
         });
         var d = dmap[pid+"|mensual|"+a+"|"+m] || {};
+        var netoCalc = r2(mias.reduce(function(s,f){ return s+Number(f.neto); },0));
         var igvCalc = r2(mias.reduce(function(s,f){ return s+Number(f.igv); },0));
         var renCalc = r2(mias.reduce(function(s,f){ return s+Number(f.renta); },0));
         var igv = d.igv_real == null ? igvCalc : Number(d.igv_real);
@@ -354,7 +355,7 @@ function App(props){
         var pres = !!d.presentada_en;
         out.push({
           pid:pid, p:p, anio:a, mes:m, d:d, facturas:mias.length,
-          igvCalc:igvCalc, renCalc:renCalc, igv:igv, renta:renta,
+          netoCalc:netoCalc, igvCalc:igvCalc, renCalc:renCalc, igv:igv, renta:renta,
           sire:!!d.sire_generado, pres:pres,
           igvPag:!!d.igv_pagado_en, renPag:!!d.renta_pagado_en,
           cerrada: pres && (igv<=0 || !!d.igv_pagado_en) && (renta<=0 || !!d.renta_pagado_en),
@@ -1056,8 +1057,6 @@ function Matriz(p){
 function FilaDecl(p){
   var o = p.o;
   var s1 = useState(false), edit = s1[0], setEdit = s1[1];
-  var s2 = useState(String(o.igv)), igv = s2[0], setIgv = s2[1];
-  var s3 = useState(String(o.renta)), renta = s3[0], setRenta = s3[1];
   var d = o.vence ? dias(o.vence) : null;
   var color = d !== null && d < 0 ? "var(--alerta)" : d !== null && d <= 5
     ? "var(--ambar)" : "var(--ink40)";
@@ -1093,22 +1092,209 @@ function FilaDecl(p){
         onClick:function(){ p.guardar(o,{renta_pagado_en:o.renPag?null:hoyISO()}); }})
         : h("span",{className:"hint"},"renta en cero"),
       h("button",{className:"lk",onClick:function(){ setEdit(!edit); }},
-        edit?"cerrar":"corregir montos")),
+        edit ? "cerrar el detalle" : "detalle del 0621"),
+      o.d && o.d.verificacion === "con_diferencia"
+        ? h("span",{className:"mono",style:{fontSize:10,color:"var(--alerta)"}},
+            "con diferencia") : null,
+      o.d && o.d.igv_prorrogado
+        ? h("span",{className:"mono",style:{fontSize:10,color:"var(--detra)"}},
+            "IGV prorrogado") : null),
 
-    edit ? h("div",{className:"sep",style:{marginTop:10,paddingTop:10}},
-      h("div",{style:{display:"grid",gap:10,
-          gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))"}},
-        h(Campo,{label:"IGV a pagar",tipo:"number",value:igv,onChange:setIgv,
-          nota:"calculado "+money(o.igvCalc)}),
-        h(Campo,{label:"Renta a pagar",tipo:"number",value:renta,onChange:setRenta,
-          nota:"calculado "+money(o.renCalc)})),
-      h("div",{className:"row",style:{marginTop:10}},
-        h("button",{className:"btn sm",onClick:function(){
-          p.guardar(o,{igv_real:Number(igv)||0, renta_real:Number(renta)||0});
-          setEdit(false);
-        }},"Guardar"),
-        h("span",{className:"hint"},
-          "El IGV puede bajar con compras; la renta es 1% del neto."))) : null);
+    edit ? h(Ficha0621,{o:o,guardar:p.guardar,
+      cerrar:function(){ setEdit(false); }}) : null);
+}
+
+/* El detalle del 0621 de un mes. Lo que llega del contador en la constancia y
+   su detalle; lo que el sistema ya sabe (ventas e IGV de las facturas) viene
+   precargado. Los chequeos son los del archivo v2: si el IGV declarado no sale
+   de ventas - compras - saldo anterior, hay algo que no cuadra. */
+
+var FUENTES = [["","— elegir —"],
+  ["constancia_detalle","Constancia + detalle del contador"],
+  ["pedido_sol","Pedido en SOL (ZIP)"],
+  ["resumen","Resumen del contador (imagen)"],
+  ["propias","Mis propias facturas"]];
+var VERIF = [["por_verificar","Por verificar"],["verificado","Verificado"],
+  ["con_diferencia","Con diferencia"]];
+
+function Chequeo(p){
+  if(p.esperado == null || p.declarado == null) return null;
+  var dif = r2(Number(p.declarado) - Number(p.esperado));
+  var ok = Math.abs(dif) <= (p.tol == null ? 1 : p.tol);
+  return h("div",{className:"hint",style:{marginTop:3,
+      color: ok ? "var(--verde)" : "var(--alerta)"}},
+    p.formula + " = " + money(p.esperado) + (ok ? " · cuadra"
+      : " · declarado " + money(p.declarado) + ", difiere " + money(Math.abs(dif))));
+}
+
+function Ficha0621(p){
+  var o = p.o, d = o.d || {};
+  function ini(k, alt){
+    var v = d[k];
+    return v == null ? (alt == null ? "" : String(alt)) : String(v);
+  }
+  var s = useState(function(){
+    return {
+      numero_orden: ini("numero_orden"),
+      tipo_declaracion: d.tipo_declaracion || "original",
+      ventas: ini("ventas", o.netoCalc),
+      igv_ventas: ini("igv_ventas", o.igvCalc),
+      compras: ini("compras"),
+      igv_compras: ini("igv_compras"),
+      saldo_favor_ant: ini("saldo_favor_ant"),
+      retenciones_igv: ini("retenciones_igv"),
+      igv_real: ini("igv_real", o.igvCalc),
+      saldo_favor_sig: ini("saldo_favor_sig"),
+      igv_prorrogado: !!d.igv_prorrogado,
+      ingresos_netos: ini("ingresos_netos", o.netoCalc),
+      renta_real: ini("renta_real", o.renCalc),
+      retencion_4ta: ini("retencion_4ta"),
+      otros_gastos: ini("otros_gastos"),
+      fuente: d.fuente || "",
+      verificacion: d.verificacion || "por_verificar"
+    };
+  }), fm = s[0], setFm = s[1];
+  var s2 = useState(false), yendo = s2[0], setYendo = s2[1];
+
+  function set(k){
+    return function(v){
+      setFm(function(prev){ var n = Object.assign({}, prev); n[k] = v; return n; });
+    };
+  }
+  var num = function(k){ return fm[k] === "" ? null : Number(fm[k]); };
+
+  /* Chequeo del IGV: debito - credito - saldo anterior - retenciones */
+  var igvEsperado = null;
+  if(fm.igv_ventas !== "" && fm.igv_compras !== ""){
+    igvEsperado = r2(Math.max(0, num("igv_ventas") - num("igv_compras")
+      - (num("saldo_favor_ant") || 0) - (num("retenciones_igv") || 0)));
+  }
+  var rentaEsperada = fm.ingresos_netos !== ""
+    ? r2(num("ingresos_netos") * 0.01) : null;
+  var margen = (fm.ventas !== "")
+    ? r2(num("ventas") - (num("compras") || 0) - (num("otros_gastos") || 0)) : null;
+
+  function guardar(){
+    setYendo(true);
+    p.guardar(o, {
+      numero_orden: fm.numero_orden || null,
+      tipo_declaracion: fm.tipo_declaracion,
+      ventas: num("ventas"), igv_ventas: num("igv_ventas"),
+      compras: num("compras"), igv_compras: num("igv_compras"),
+      saldo_favor_ant: num("saldo_favor_ant"),
+      retenciones_igv: num("retenciones_igv"),
+      igv_real: num("igv_real") || 0,
+      saldo_favor_sig: num("saldo_favor_sig"),
+      igv_prorrogado: !!fm.igv_prorrogado,
+      ingresos_netos: num("ingresos_netos"),
+      renta_real: num("renta_real") || 0,
+      retencion_4ta: num("retencion_4ta"),
+      otros_gastos: num("otros_gastos"),
+      fuente: fm.fuente || null,
+      verificacion: fm.verificacion
+    }).then(function(){ setYendo(false); p.cerrar(); });
+  }
+
+  var G = function(){
+    return h("div",{style:{display:"grid",gap:10,
+      gridTemplateColumns:"repeat(auto-fit,minmax(145px,1fr))"}},
+      Array.prototype.slice.call(arguments));
+  };
+  var Bloque = function(titulo, hijos){
+    return h("div",{style:{marginTop:16}},
+      h(Caps,null, titulo), hijos);
+  };
+
+  return h("div",{className:"sep",style:{marginTop:12,paddingTop:14}},
+    h("div",{className:"hint",style:{marginBottom:12,lineHeight:1.7}},
+      "Ventas e IGV vienen de las facturas que ya están cargadas; el resto sale de la constancia y el detalle que manda el contador. Entre paréntesis, la casilla del 0621."),
+
+    G(h(Campo,{label:"N° de orden",value:fm.numero_orden,ph:"1212253098",
+        onChange:set("numero_orden"),nota:"de la constancia"}),
+      h("label",{style:{display:"block"}},
+        h("span",{className:"lbl"},"Tipo"),
+        h("select",{className:"in",value:fm.tipo_declaracion,
+            onChange:function(e){ set("tipo_declaracion")(e.target.value); }},
+          h("option",{value:"original"},"Original"),
+          h("option",{value:"sustitutoria"},"Sustitutoria"),
+          h("option",{value:"rectificatoria"},"Rectificatoria")))),
+
+    Bloque("IGV · ventas",
+      G(h(Campo,{label:"Ventas sin IGV (100)",tipo:"number",value:fm.ventas,
+          onChange:set("ventas"),nota:"de tus facturas: "+money(o.netoCalc)}),
+        h(Campo,{label:"IGV de ventas (131)",tipo:"number",value:fm.igv_ventas,
+          onChange:set("igv_ventas"),nota:"calculado: "+money(o.igvCalc)}))),
+
+    Bloque("IGV · compras y descuentos",
+      h("div",null,
+        G(h(Campo,{label:"Compras sin IGV (107)",tipo:"number",value:fm.compras,
+            onChange:set("compras"),nota:"lo que compró con factura"}),
+          h(Campo,{label:"Crédito fiscal (178)",tipo:"number",value:fm.igv_compras,
+            onChange:set("igv_compras"),nota:"el total, incluye tasa reducida"}),
+          h(Campo,{label:"Saldo a favor anterior (145)",tipo:"number",
+            value:fm.saldo_favor_ant,onChange:set("saldo_favor_ant"),
+            nota:"el que dejó el mes pasado"}),
+          h(Campo,{label:"Retenciones de IGV",tipo:"number",
+            value:fm.retenciones_igv,onChange:set("retenciones_igv"),
+            nota:"normalmente 0"})))),
+
+    Bloque("IGV a pagar",
+      h("div",null,
+        G(h(Campo,{label:"IGV a pagar (188)",tipo:"number",value:fm.igv_real,
+            onChange:set("igv_real"),nota:"tributo 1011"}),
+          h(Campo,{label:"Saldo a favor siguiente (184)",tipo:"number",
+            value:fm.saldo_favor_sig,onChange:set("saldo_favor_sig"),
+            nota:"debe aparecer como saldo anterior el mes que viene"})),
+        h(Chequeo,{formula:"IGV ventas − crédito − saldo anterior − retenciones",
+          esperado:igvEsperado, declarado:num("igv_real")}),
+        h("label",{className:"row",style:{marginTop:10,gap:7,cursor:"pointer"}},
+          h("input",{type:"checkbox",checked:fm.igv_prorrogado,
+            onChange:function(e){ set("igv_prorrogado")(e.target.checked); }}),
+          h("span",{style:{fontSize:13}},"IGV prorrogado (IGV Justo)"),
+          h("span",{className:"hint"},
+            "el pago vence tres periodos después, sin intereses")))),
+
+    Bloque("Renta",
+      h("div",null,
+        G(h(Campo,{label:"Ingresos netos (301)",tipo:"number",value:fm.ingresos_netos,
+            onChange:set("ingresos_netos"),nota:"base del pago a cuenta"}),
+          h(Campo,{label:"Pago a cuenta (324)",tipo:"number",value:fm.renta_real,
+            onChange:set("renta_real"),nota:"tributo 3121"}),
+          h(Campo,{label:"Retención 4ta (3042)",tipo:"number",value:fm.retencion_4ta,
+            onChange:set("retencion_4ta"),
+            nota:"sólo si pagó honorarios. Va en el PLAME, no en el 621"})),
+        h(Chequeo,{formula:"1% de los ingresos netos",
+          esperado:rentaEsperada, declarado:num("renta_real")}))),
+
+    Bloque("Gastos del mes",
+      h("div",null,
+        G(h(Campo,{label:"Otros gastos",tipo:"number",value:fm.otros_gastos,
+            onChange:set("otros_gastos"),
+            nota:"honorarios, planilla, alquiler. No repite las compras"})),
+        margen != null && margen < 0
+          ? h("div",{className:"hint",style:{marginTop:6,color:"var(--ambar)"}},
+              "Margen negativo: " + money(margen) +
+              ". Las compras y gastos superan las ventas del mes.")
+          : null)),
+
+    Bloque("De dónde salió",
+      G(h("label",{style:{display:"block"}},
+          h("span",{className:"lbl"},"Fuente"),
+          h("select",{className:"in",value:fm.fuente,
+              onChange:function(e){ set("fuente")(e.target.value); }},
+            FUENTES.map(function(f){
+              return h("option",{key:f[0],value:f[0]}, f[1]); }))),
+        h("label",{style:{display:"block"}},
+          h("span",{className:"lbl"},"Estado"),
+          h("select",{className:"in",value:fm.verificacion,
+              onChange:function(e){ set("verificacion")(e.target.value); }},
+            VERIF.map(function(f){
+              return h("option",{key:f[0],value:f[0]}, f[1]); }))))),
+
+    h("div",{className:"row",style:{marginTop:16,gap:10}},
+      h("button",{className:"btn",disabled:yendo,onClick:guardar},
+        yendo ? "guardando…" : "Guardar el mes"),
+      h("button",{className:"lk",onClick:p.cerrar},"cancelar")));
 }
 
 /* ---------------------------------------------------------------- padrón */
@@ -1256,6 +1442,9 @@ function Anual(p){
   var gmap = {};
   p.gastos.forEach(function(g){ if(g.anio===anio) gmap[g.persona_id] = g; });
 
+  /* Todo sale de los meses: lo que se carga en el detalle del 0621 de cada
+     declaración. Acá no se escribe nada. Y lo que se descuenta son los pagos
+     a cuenta PAGADOS, no los declarados: un 0621 presentado no es un pago. */
   var filas = useMemo(function(){
     var porP = {};
     p.emitidas.forEach(function(f){
@@ -1268,89 +1457,119 @@ function Anual(p){
         if(p.personas[i].id === pid){ per = p.personas[i]; break; }
       if(!per) return null;
       var fs = porP[pid];
-      var ing = r2(fs.reduce(function(s,f){ return s+Number(f.neto); },0));
-      var g = Number((gmap[pid]||{}).gastos) || 0;
-      var neta = Math.max(0, r2(ing - g));
+      var meses = p.oblig.filter(function(o){
+        return o.pid === pid && o.anio === anio; });
+
+      /* Quien esta desactivado no genera obligaciones mensuales, pero si
+         facturo en el ejercicio su ingreso cuenta igual para la anual. */
+      var ingFacturas = r2(fs.reduce(function(s,f){ return s+Number(f.neto); },0));
+      var ing = 0, compras = 0, otros = 0, sinCargar = 0;
+      var aDecl = 0, aPagado = 0;
+      meses.forEach(function(o){
+        var d = o.d || {};
+        ing += d.ingresos_netos != null ? Number(d.ingresos_netos) : o.netoCalc;
+        if(d.compras != null || d.otros_gastos != null){
+          compras += Number(d.compras || 0);
+          otros   += Number(d.otros_gastos || 0);
+        } else if(o.facturas > 0) sinCargar++;
+        aDecl += Number(o.renta || 0);
+        if(o.renPag) aPagado += Number(o.renta || 0);
+      });
+      ing = meses.length ? r2(ing) : ingFacturas;
+
+      /* Compatibilidad: si nunca se cargó un mes pero hay un gasto anual
+         viejo escrito a mano, se usa ese y se avisa. */
+      var legado = (compras + otros === 0) ? (Number((gmap[pid]||{}).gastos) || 0) : 0;
+      var gastos = r2(compras + otros + legado);
+
+      var neta = Math.max(0, r2(ing - gastos));
       var t1 = Math.min(neta, 15*uit), t2 = Math.max(0, neta - 15*uit);
       var imp = r2(t1*0.10 + t2*0.295);
-      var aCuenta = r2(p.oblig.filter(function(o){
-        return o.pid === pid && o.anio === anio;
-      }).reduce(function(s,o){ return s + Number(o.renta); }, 0));
-      return {pid:pid, per:per, ing:ing, gastos:g, neta:neta, imp:imp,
-              aCuenta:aCuenta, saldo:r2(imp - aCuenta), n:fs.length};
+      return {pid:pid, per:per, ing:ing, compras:r2(compras), otros:r2(otros),
+              legado:legado, gastos:gastos, neta:neta, imp:imp,
+              aDecl:r2(aDecl), aPagado:r2(aPagado), sinCargar:sinCargar,
+              saldo:r2(imp - aPagado), n:fs.length};
     }).filter(Boolean).sort(function(a,b){ return b.ing - a.ing; });
   },[p.emitidas,p.personas,p.gastos,p.oblig,uit,anio]);
 
   var totIng = r2(filas.reduce(function(s,x){ return s+x.ing; },0));
   var totImp = r2(filas.reduce(function(s,x){ return s+x.imp; },0));
   var totSaldo = r2(filas.reduce(function(s,x){ return s+x.saldo; },0));
+  var totSinCargar = filas.reduce(function(s,x){ return s+x.sinCargar; },0);
+  var sinPagar = r2(filas.reduce(function(s,x){ return s + (x.aDecl - x.aPagado); },0));
+
+  var th = function(t,i){
+    return h("th",{key:i,className:"caps",style:{fontSize:9,color:"var(--ink40)",
+      padding:"8px 10px",textAlign:i?"right":"left",whiteSpace:"nowrap"}}, t);
+  };
+  var td = function(v, extra){
+    return h("td",{className:"mono",style:Object.assign({padding:"8px 10px",
+      textAlign:"right",fontSize:12}, extra||{})}, v);
+  };
 
   return h("div",null,
     h("div",{style:{display:"grid",gap:12,marginBottom:16,
         gridTemplateColumns:"repeat(auto-fit,minmax(190px,1fr))"}},
-      h(Kpi,{l:"Ingreso neto "+anio,v:miles(totIng),sub:plural(filas.length,"asesor","asesores")}),
+      h(Kpi,{l:"Ingreso neto "+anio,v:miles(totIng),
+        sub:plural(filas.length,"contribuyente","contribuyentes")}),
       h(Kpi,{l:"Impuesto proyectado",v:miles(totImp),c:"var(--ambar)",
-        sub:"10% hasta 15 UIT, 29.5% encima"}),
-      h(Kpi,{l:"Saldo por regularizar",v:miles(totSaldo),
+        sub:"RMT: 10% hasta 15 UIT, 29.5% encima"}),
+      h(Kpi,{l:"Saldo para marzo",v:miles(totSaldo),
         c:totSaldo>0?"var(--alerta)":"var(--verde)",
-        sub:"impuesto menos pagos a cuenta"})),
+        sub:"impuesto menos pagos a cuenta pagados"})),
 
-    h("div",{className:"card hint",style:{padding:"10px 14px",marginBottom:14}},
-      "UIT "+anio+": "+money(uit)+". La declaración anual es obligatoria para "+
-      "todo el que facturó en el ejercicio, aunque hoy esté desactivado o haya "+
-      "suspendido actividades. Carga los gastos para que la proyección sirva."),
+    h("div",{className:"card hint",style:{padding:"11px 14px",marginBottom:14,
+        lineHeight:1.8}},
+      "Acá no se escribe nada: todo se calcula con lo que cargas mes a mes en el ",
+      "detalle del 0621 de cada declaración. ",
+      totSinCargar > 0
+        ? h("span",{style:{color:"var(--ambar)"}},
+            "Faltan " + plural(totSinCargar,"mes","meses") + " sin compras ni gastos cargados: " +
+            "mientras tanto la renta neta sale alta y el impuesto proyectado también.")
+        : "Todos los meses con facturas tienen sus compras y gastos cargados.",
+      sinPagar > 0
+        ? h("span",{style:{color:"var(--alerta)"}},
+            " Hay " + money(sinPagar) + " de pagos a cuenta declarados pero no pagados: " +
+            "no se descuentan de la anual hasta que se paguen.")
+        : null),
 
     !filas.length ? h(Vacio,null,"Nadie ha facturado este año.") :
     h("div",{className:"card",style:{overflowX:"auto"}},
-      h("table",{style:{minWidth:720}},
+      h("table",{style:{minWidth:860}},
         h("thead",null, h("tr",{style:{borderBottom:"1px solid var(--rule)"}},
-          ["Asesor","Ingreso neto","Gastos","Renta neta","Impuesto",
-           "Pagos a cuenta","Saldo"].map(function(t,i){
-            return h("th",{key:i,className:"caps",style:{fontSize:9,
-              color:"var(--ink40)",padding:"8px 10px",
-              textAlign:i?"right":"left"}}, t);
-          }))),
+          ["Contribuyente","Ingreso neto","Compras","Otros gastos","Renta neta",
+           "Impuesto","A cuenta pagado","Saldo"].map(th))),
         h("tbody",null, filas.map(function(f){
           return h("tr",{key:f.pid,style:{borderTop:"1px solid var(--rule)"}},
             h("td",{style:{padding:"8px 10px"}},
               h("div",{style:{fontSize:12,fontWeight:600}}, f.per.nombre),
               h("div",{className:"hint"},
-                plural(f.n,"factura","facturas")+(f.per.activo?"":" · inactivo"))),
-            h("td",{className:"mono",style:{padding:"8px 10px",textAlign:"right",
-              fontSize:12}}, money(f.ing)),
-            h("td",{style:{padding:"6px 10px",textAlign:"right"}},
-              h("input",{className:"in",type:"number",
-                style:{width:110,textAlign:"right",fontFamily:"var(--mono)",
-                  fontSize:12,padding:"4px 6px"},
-                defaultValue:f.gastos,
-                onBlur:function(e){
-                  p.guardarGasto(f.pid, anio, e.target.value);
-                }})),
-            h("td",{className:"mono",style:{padding:"8px 10px",textAlign:"right",
-              fontSize:12}}, money(f.neta)),
-            h("td",{className:"mono",style:{padding:"8px 10px",textAlign:"right",
-              fontSize:12,color:"var(--ambar)"}}, money(f.imp)),
-            h("td",{className:"mono",style:{padding:"8px 10px",textAlign:"right",
-              fontSize:12,color:"var(--ink40)"}}, money(f.aCuenta)),
-            h("td",{className:"mono",style:{padding:"8px 10px",textAlign:"right",
-              fontSize:12,color:f.saldo>0?"var(--alerta)":"var(--verde)"}},
-              money(f.saldo)));
+                plural(f.n,"comprobante","comprobantes") +
+                (f.per.activo ? "" : " · inactivo") +
+                (f.sinCargar ? " · " + f.sinCargar + " sin cargar" : ""))),
+            td(money(f.ing)),
+            td(f.legado ? money(f.legado) : money(f.compras),
+              f.legado ? {color:"var(--ink40)"} : null),
+            td(f.legado ? "—" : money(f.otros)),
+            td(money(f.neta)),
+            td(money(f.imp), {color:"var(--ambar)"}),
+            td(money(f.aPagado), {color: f.aDecl > f.aPagado
+              ? "var(--alerta)" : "var(--ink40)"}),
+            td(money(f.saldo), {color: f.saldo>0?"var(--alerta)":"var(--verde)"}));
         })))),
 
-    h("div",{className:"card",style:{padding:16,marginTop:14}},
-      h(Caps,null,"Cuánto baja el impuesto con gastos"),
-      h("div",{className:"row",style:{gap:18}},
-        [0,0.1,0.2,0.3].map(function(pc){
-          var neta = Math.max(0, r2(totIng*(1-pc)));
-          var t1 = Math.min(neta, 15*uit), t2 = Math.max(0, neta-15*uit);
-          return h("div",{key:pc},
-            h("div",{className:"hint"}, Math.round(pc*100)+"% de gastos"),
-            h("div",{className:"mono",style:{fontSize:15}},
-              miles(r2(t1*0.10 + t2*0.295))));
-        })),
-      h("div",{className:"hint",style:{marginTop:10}},
-        "Sobre el total del equipo. Sirve para dimensionar cuánto importa que "+
-        "cada asesor junte sus comprobantes de gasto.")));
+    filas.some(function(f){ return f.legado; })
+      ? h("div",{className:"hint",style:{marginTop:10}},
+          "Las filas con gastos en gris vienen del campo anual viejo, cargado a mano. "+
+          "Se reemplazan solos en cuanto cargues las compras de algún mes.") : null,
+
+    h("div",{className:"card hint",style:{padding:"11px 14px",marginTop:14,
+        lineHeight:1.8}},
+      "UIT " + anio + ": " + money(uit) + ". Régimen MYPE Tributario para todos: ",
+      "pago a cuenta 1% hasta 300 UIT, impuesto anual 10% hasta 15 UIT (" +
+      money(15*uit) + ") y 29.5% sobre el exceso. ",
+      "La declaración anual es obligatoria para todo el que facturó en el ejercicio, ",
+      "aunque hoy esté desactivado o haya suspendido actividades."));
 }
 
 /* ---------------------------------------------------------------- arranque */
