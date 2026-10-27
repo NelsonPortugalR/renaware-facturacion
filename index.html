@@ -430,6 +430,25 @@ function App(props){
     return out;
   },[emisores,obligs,cuotas,obPend,esMio]);
 
+  /* Meses propios cuyo vencimiento ya pasó y de los que no hay nada cargado:
+     ni declaración ni deuda. No es que no se deba nada, es que no se sabe. */
+  var huecos = useMemo(function(){
+    return agenda.length === 0 ? [] : oblig.filter(function(o){
+      return esMio(o.p.ruc) && o.vigente && o.vence && dias(o.vence) < 0
+             && !(o.d && o.d.id);
+    }).sort(function(a,b){ return (a.vence < b.vence) ? -1 : 1; });
+  },[oblig, esMio, agenda]);
+
+  /* Y los RUC propios que no tienen ni un comprobante cargado: de esos no se
+     puede saber siquiera qué meses tocaba declarar. */
+  var rucsMudos = useMemo(function(){
+    var conOblig = {};
+    oblig.forEach(function(o){ conOblig[o.p.ruc] = true; });
+    return emisores.filter(function(e){
+      return e.activo && e.relacion === "propio" && e.ruc && !conOblig[e.ruc];
+    });
+  },[emisores, oblig]);
+
   /* Art. 36: con dos cuotas consecutivas impagas se pierde el fraccionamiento. */
   var riesgo = useMemo(function(){
     var em = {}; emisores.forEach(function(e){ em[e.id] = e; });
@@ -610,8 +629,8 @@ function App(props){
         borderColor:"var(--ink)"}}, aviso)) : null,
 
     h("div",{className:"wrap",style:{padding:"18px 16px 60px"}},
-      vista==="agenda" ? h(Agenda,{agenda:agenda,riesgo:riesgo,
-        marcarCuota:marcarCuota,ir:setVista}) : null,
+      vista==="agenda" ? h(Agenda,{agenda:agenda,riesgo:riesgo,huecos:huecos,
+        rucsMudos:rucsMudos,marcarCuota:marcarCuota,ir:setVista}) : null,
       vista==="deudas" ? h(Deudas,{obligs:obligs,cuotas:cuotas,emisores:emisores,
         esMio:esMio,marcarCuota:marcarCuota}) : null,
       vista==="emitir" ? h(Emitir,{emisores:emisores,receptores:receptores,
@@ -1691,6 +1710,40 @@ function Agenda(p){
         ambito === "mio" ? "No tienes nada por vencer." : "Nada por vencer acá."),
       h("div",{className:"hint",style:{marginTop:6}},
         "Cuando aparezca una cuota o una declaración por vencer, sale en esta lista.")) : null,
+
+    ambito !== "equipo" && (p.huecos.length || p.rucsMudos.length)
+      ? h("div",{className:"card",style:{padding:"12px 14px",marginBottom:20,
+          borderColor:"var(--ambar)",borderLeftWidth:3}},
+          h("div",{className:"caps",style:{fontSize:9,color:"var(--ambar)"}},
+            "Sin cargar"),
+          p.huecos.length
+            ? h("div",{style:{marginTop:6}},
+                h("div",{style:{fontSize:13}},
+                  plural(p.huecos.length,"mes vencido","meses vencidos") +
+                  " sin declaración cargada"),
+                h("div",{className:"hint",style:{marginTop:3,lineHeight:1.7}},
+                  p.huecos.slice(0,8).map(function(o){
+                    return etiqMes(o.anio,o.mes) + " · " + o.p.nombre;
+                  }).join("  ·  ") +
+                  (p.huecos.length > 8 ? "  ·  y " + (p.huecos.length-8) + " más" : "")),
+                h("div",{className:"hint",style:{marginTop:5}},
+                  "No quiere decir que debas algo: quiere decir que no se sabe. ",
+                  h("button",{className:"lk",
+                    onClick:function(){ p.ir("declaraciones"); }},
+                    "cargar el detalle del 0621")))
+            : null,
+          p.rucsMudos.length
+            ? h("div",{style:{marginTop: p.huecos.length ? 12 : 6}},
+                h("div",{style:{fontSize:13}},
+                  plural(p.rucsMudos.length,"RUC propio","RUC propios") +
+                  " sin ningún comprobante cargado"),
+                h("div",{className:"hint",style:{marginTop:3}},
+                  p.rucsMudos.map(function(e){
+                    return e.nombre + " (" + e.ruc + ")"; }).join("  ·  ")),
+                h("div",{className:"hint",style:{marginTop:5}},
+                  "De estos no se puede saber qué meses tocaba declarar."))
+            : null)
+      : null,
 
     BLOQ.map(function(b){
       var fs = porBloque[b[0]] || [];

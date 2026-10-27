@@ -31,7 +31,12 @@ const personas = [
   { id: "p3", nombre: "CARLA PRUEBA TRES", codigo_asesor: "1003", ruc: "10296091869",
     cuenta_detraccion: null, cci: null, banco: null, cuenta_bancaria: null,
     codigo_division: "wv08", factura_desde: null, regimen: "RMT",
-    activo: false, celular: null, correo: null, notas: null }
+    activo: false, celular: null, correo: null, notas: null },
+  /* propio: mismo RUC que el emisor Portugal Research, como en la base real */
+  { id: "p4", nombre: "PORTUGAL PRUEBA", codigo_asesor: "83428", ruc: "20600022653",
+    cuenta_detraccion: "00101993892", cci: "1", banco: "BCP", cuenta_bancaria: "1",
+    codigo_division: "wv08", factura_desde: ANIO + "-06-01", regimen: "RMT",
+    activo: true, celular: null, correo: null, notas: null }
 ];
 
 function fac(id, pid, nombre, ruc, neto, estado, fecha, sem) {
@@ -57,7 +62,9 @@ const facturas = [
   // p2 sin RUC: pendiente trabado
   fac("f4", "p2", "BEA PRUEBA DOS", null, 300, "borrador", ANIO + "-09-04", 36),
   // p3 inactiva pero con factura emitida
-  fac("f5", "p3", "CARLA PRUEBA TRES", "10296091869", 800, "emitida", ANIO + "-06-12", 24)
+  fac("f5", "p3", "CARLA PRUEBA TRES", "10296091869", 800, "emitida", ANIO + "-06-12", 24),
+  // propio: junio quedó vencido y sin declaración cargada -> es un hueco
+  fac("f6", "p4", "PORTUGAL PRUEBA", "20600022653", 2000, "emitida", ANIO + "-06-15", 24)
 ];
 
 // cronograma: grupo "1" vence el 19 del mes siguiente; grupo "9" el 23
@@ -227,8 +234,23 @@ setTimeout(async () => {
   /* --- la agenda arranca en lo propio: las declaraciones del equipo no
          pueden tapar las deudas de Nelson (eran 108 contra 2) --- */
   ok("ofrece los tres ámbitos", /Lo mío/.test(T) && /Del equipo/.test(T) && /Todo/.test(T));
-  ok("arranca en lo propio, sin declaraciones de asesores",
-    !/Declarar/.test(T), "se coló una declaración del equipo");
+  ok("en lo propio no se cuela ninguna declaración del equipo",
+    !/ANA PRUEBA UNO/.test(T) && !/BEA PRUEBA DOS/.test(T),
+    "se coló alguien del equipo");
+  ok("en lo propio sí sale la declaración propia",
+    /PORTUGAL PRUEBA/.test(T));
+
+  /* lo que pidió Nelson: avisar de los meses ya vencidos de los que no hay
+     nada cargado, y de los RUC propios sin un solo comprobante */
+  ok("avisa de los meses vencidos sin declaración cargada",
+    /meses vencidos sin declaración cargada/.test(T) ||
+    /mes vencido sin declaración cargada/.test(T));
+  ok("nombra el mes y a quién", /junio|julio|agosto|setiembre/.test(T));
+  ok("aclara que no es una deuda sino un dato que falta",
+    /no se sabe/.test(T));
+  ok("avisa de los RUC propios sin comprobantes",
+    /sin ningún comprobante cargado/.test(T));
+  ok("nombra el RUC mudo", /10449906662/.test(T));
   ok("en lo propio quedan las tres deudas", /Cuota 1 de 9/.test(T) &&
     /Cuota 2 de 9/.test(T) && /IGV junio 2026/.test(T));
 
@@ -244,6 +266,7 @@ setTimeout(async () => {
   ok("el ámbito del equipo sí trae las declaraciones", /Declarar/.test(TQ));
   ok("y explica por qué figuran pendientes", /nunca se registraron/.test(TQ));
   ok("el ámbito del equipo no repite las deudas propias", !/Cuota 1 de 9/.test(TQ));
+  ok("el ámbito del equipo no trae lo propio", !/PORTUGAL PRUEBA/.test(TQ));
   await chip("Lo mío");
 
   /* --- cálculo del comprobante: la aritmética que debe cuadrar al céntimo --- */
@@ -347,7 +370,7 @@ setTimeout(async () => {
      trabado sin ruc: 300 neto -> 354 */
   await irA("Resumen");
   const TR = txt();
-  ok("facturado = S/ 2,714", TR.indexOf("S/ 2,714") >= 0);
+  ok("facturado = S/ 5,074", TR.indexOf("S/ 5,074") >= 0);
   ok("pendiente = S/ 590", TR.indexOf("S/ 590") >= 0);
   ok("trabado sin RUC = S/ 354", TR.indexOf("S/ 354") >= 0);
   ok("cuenta 1 persona sin RUC", /1 personas|1 persona/.test(TR));
@@ -432,8 +455,8 @@ setTimeout(async () => {
   ok("anual incluye a la inactiva que facturó", /CARLA PRUEBA TRES/.test(T5));
   ok("anual marca que está inactiva", /inactivo/.test(T5));
   /* ingreso neto total = 1000 + 500 + 800 = 2300; impuesto 10% = 230 */
-  ok("ingreso neto del año = 2,300", T5.indexOf("S/ 2,300") >= 0);
-  ok("impuesto proyectado = 230", T5.indexOf("S/ 230") >= 0);
+  ok("ingreso neto del año = 4,300", T5.indexOf("S/ 4,300") >= 0);
+  ok("impuesto proyectado = 430", T5.indexOf("S/ 430") >= 0);
   ok("dice que la anual sigue siendo obligatoria",
     /obligatoria/.test(T5));
   ok("muestra la UIT vigente", /5,500/.test(T5));
@@ -442,10 +465,10 @@ setTimeout(async () => {
      ninguno pagado, así que no descuenta nada: 230, no 215. Un 0621 presentado
      no es un pago. */
   ok("el saldo no descuenta lo declarado pero no pagado",
-    T5.indexOf("S/ 230") >= 0);
+    T5.indexOf("S/ 430") >= 0);
   ok("avisa de los pagos a cuenta declarados y no pagados",
     /declarados pero no pagados/.test(T5));
-  ok("anual cuenta sólo a quienes facturaron", /2 contribuyentes/.test(T5));
+  ok("anual cuenta sólo a quienes facturaron", /3 contribuyentes/.test(T5));
   ok("anual avisa de los meses sin compras cargadas",
     /sin compras ni gastos cargados/.test(T5));
   ok("anual dice que no se escribe nada ahí", /no se escribe nada/.test(T5));
