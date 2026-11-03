@@ -445,9 +445,25 @@ setTimeout(async () => {
     await pausa(80);
     const TC = txt();
     ok("lista a quienes tienen RUC", /ANA PRUEBA UNO/.test(TC));
-    ok("ofrece elegir quién le lleva la contabilidad",
-      /El contador recomendado/.test(TC) && /La lleva por fuera/.test(TC));
+    ok("mueve de categoría con un solo clic", /pasar al contador/.test(TC));
+    ok("muestra en qué categoría está cada uno", /Por fuera/.test(TC));
     ok("los propios no se cambian desde ahí", /no se cambia acá/.test(TC));
+
+    /* mover varios de una vez: marcar y pasar */
+    const cajas = [...doc.querySelectorAll('input[type=checkbox]')]
+      .filter(c => !c.disabled);
+    ok("se pueden marcar personas para moverlas en bloque", cajas.length >= 1,
+      "marcables: " + cajas.length);
+    if (cajas.length) {
+      cajas[0].dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+      await pausa(80);
+      const TB = txt();
+      ok("al marcar aparece la barra para mover el bloque",
+        /seleccionado/.test(TB) && /pasar a por fuera/.test(TB));
+      ok("y se puede quitar la selección", /quitar selección/.test(TB));
+    }
+    ok("el propio no se puede marcar",
+      [...doc.querySelectorAll('input[type=checkbox]')].some(c => c.disabled));
     ok("explica para qué sirve la distinción",
       /sólo la fecha y el aviso de que declararon/.test(TC));
   }

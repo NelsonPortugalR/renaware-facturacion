@@ -691,14 +691,23 @@ function App(props){
         return true;
       });
   }
-  function guardarContabilidad(pid, valor){
-    return db.from("eq_personas").update({contabilidad:valor}).eq("id",pid)
+  function moverContabilidad(ids, valor){
+    return db.from("eq_personas").update({contabilidad:valor}).in("id",ids)
       .select().then(function(r){
-        if(r.error){ avisar("No se pudo guardar: " + r.error.message); return false; }
+        if(r.error){ avisar("No se pudo mover: " + r.error.message); return false; }
+        var m = {}; r.data.forEach(function(x){ m[x.id] = x; });
         setPersonas(function(prev){ return prev.map(function(x){
-          return x.id===pid ? Object.assign({}, x, r.data[0]) : x; }); });
+          return m[x.id] ? Object.assign({}, x, m[x.id]) : x; }); });
+        avisar(r.data.length === 1
+          ? (r.data[0].nombre + " ahora " + (valor === "contador"
+              ? "va con el contador." : "lleva la contabilidad por fuera."))
+          : (r.data.length + " pasaron a " + (valor === "contador"
+              ? "el contador." : "llevarla por fuera.")));
         return true;
       });
+  }
+  function guardarContabilidad(pid, valor){
+    return moverContabilidad([pid], valor);
   }
   function guardarGasto(pid, anio, monto){
     return db.from("fact_gastos_anuales").upsert({
@@ -777,7 +786,8 @@ function App(props){
       vista==="ajustes" ? h(Ajustes,{emisores:emisores,receptores:receptores,
         reglas:reglas,cfg:cfg,personas:personas,esMio:esMio,
         guardarRegla:guardarRegla,actualizarRegla:actualizarRegla,
-        guardarContabilidad:guardarContabilidad}) : null,
+        guardarContabilidad:guardarContabilidad,
+        moverContabilidad:moverContabilidad}) : null,
       vista==="resumen" ? h(Resumen,{personas:personas,emitidas:emitidas,
         borradores:borradores,totFact:totFact,totPend:totPend,sinRuc:sinRuc,
         oblig:oblig,obPend:obPend,vencidas:vencidas,ir:setVista}) : null,
@@ -2398,6 +2408,8 @@ function Ajustes(p){
 function QuienLleva(p){
   var s1 = useState(""), q = s1[0], setQ = s1[1];
   var s2 = useState("todas"), ver = s2[0], setVer = s2[1];
+  var s3 = useState({}), sel = s3[0], setSel = s3[1];
+  var s4 = useState(false), yendo = s4[0], setYendo = s4[1];
 
   var conRuc = useMemo(function(){
     return p.personas.filter(function(x){ return x.activo && x.ruc; })
@@ -2414,11 +2426,28 @@ function QuienLleva(p){
     return ambitoOk(ver, g);
   });
 
+  var elegidos = Object.keys(sel).filter(function(k){ return sel[k]; });
+
+  function mover(ids, valor){
+    setYendo(true);
+    return p.moverContabilidad(ids, valor).then(function(){
+      setYendo(false); setSel({});
+    });
+  }
+  function alternar(id){
+    setSel(function(prev){
+      var n = Object.assign({}, prev); n[id] = !n[id]; return n;
+    });
+  }
+
+  var ETIQ = {contador:"Con el contador", externa:"Por fuera",
+              sin_definir:"Sin definir", mio:"Propio"};
+
   return h("div",null,
     h("div",{className:"hint",style:{marginBottom:14,lineHeight:1.8,maxWidth:680}},
       "Quién lleva la contabilidad decide cuánto dato se le puede pedir a cada uno. ",
-      "Del grupo del contador recomendado vamos a tener las casillas del 0621; ",
-      "de los que la llevan por fuera, sólo la fecha y el aviso de que declararon. ",
+      "Del grupo del contador vamos a tener las casillas del 0621; de los que la ",
+      "llevan por fuera, sólo la fecha y el aviso de que declararon. ",
       h("br",null),
       "Los RUC propios no se cambian desde acá: salen de ser emisores propios."),
 
@@ -2433,35 +2462,58 @@ function QuienLleva(p){
       value:q,onChange:function(e){ setQ(e.target.value); }}),
 
     !lista.length ? h(Vacio,null,"Nadie en este grupo.") :
-    h("div",{className:"card",style:{overflowX:"auto"}},
-      h("table",null,
-        h("thead",null,h("tr",null,
-          ["Persona","RUC","Quién le lleva la contabilidad"].map(function(t,i){
-            return h("th",{key:i,style:{textAlign:"left",padding:"9px 12px",
-              borderBottom:"1px solid var(--rule)",font:"9px/1 var(--mono)",
-              textTransform:"uppercase",letterSpacing:".12em",
-              color:"var(--ink40)",whiteSpace:"nowrap"}}, t); }))),
-        h("tbody",null, lista.map(function(x){
-          var g = grupoDe4(p.esMio, x);
-          return h("tr",{key:x.id},
-            h("td",{style:{padding:"8px 12px",borderTop:"1px solid var(--rule)",
-              fontSize:12}}, x.nombre,
-              h("div",{className:"hint"}, x.codigo_asesor || "sin código")),
-            h("td",{className:"mono",style:{padding:"8px 12px",
-              borderTop:"1px solid var(--rule)",fontSize:11}}, x.ruc),
-            h("td",{style:{padding:"6px 12px",borderTop:"1px solid var(--rule)"}},
-              g === "mio"
-                ? h("span",{className:"mono hint"},"propio · no se cambia acá")
-                : h("select",{className:"in",style:{maxWidth:240,fontSize:13,
-                      padding:"5px 8px"},
-                    value:x.contabilidad || "",
-                    onChange:function(e){
-                      p.guardarContabilidad(x.id, e.target.value || null);
-                    }},
-                    h("option",{value:""},"— sin definir —"),
-                    h("option",{value:"contador"},"El contador recomendado"),
-                    h("option",{value:"externa"},"La lleva por fuera"))));
-        })))),
+    h("div",{className:"card"},
+      lista.map(function(x,i){
+        var g = grupoDe4(p.esMio, x);
+        var propio = g === "mio";
+        return h("div",{key:x.id,style:{padding:"9px 14px",
+            borderTop: i ? "1px solid var(--rule)" : "none",
+            display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}},
+          h("input",{type:"checkbox",checked:!!sel[x.id],disabled:propio,
+            onChange:function(){ alternar(x.id); },
+            style:{opacity:propio?.3:1}}),
+          h("div",{style:{flex:"1 1 220px",minWidth:0}},
+            h("div",{style:{fontSize:13}}, x.nombre),
+            h("div",{className:"hint"},
+              "RUC " + x.ruc + " · " + (x.codigo_asesor || "sin código"))),
+          h("span",{className:"mono",style:{fontSize:10,
+              color: g === "contador" ? "var(--verde)"
+                   : (g === "mio" ? "var(--detra)" : "var(--ink40)"),
+              minWidth:96,textAlign:"right"}}, ETIQ[g]),
+          h("div",{style:{minWidth:132,textAlign:"right"}},
+            propio ? h("span",{className:"hint"},"no se cambia acá")
+            : g === "contador"
+              ? h("button",{className:"btn sec sm",disabled:yendo,
+                  onClick:function(){ mover([x.id], "externa"); }},
+                  "pasar a por fuera")
+              : h("div",{className:"row",style:{gap:6,justifyContent:"flex-end"}},
+                  h("button",{className:"btn sm",disabled:yendo,
+                    onClick:function(){ mover([x.id], "contador"); }},
+                    "pasar al contador"),
+                  g === "sin_definir"
+                    ? h("button",{className:"btn sec sm",disabled:yendo,
+                        onClick:function(){ mover([x.id], "externa"); }},
+                        "por fuera")
+                    : null)));
+      })),
+
+    elegidos.length
+      ? h("div",{style:{position:"sticky",bottom:0,padding:"12px 0"}},
+          h("div",{className:"card",style:{padding:"10px 14px",
+              borderColor:"var(--ink)",display:"flex",gap:10,
+              justifyContent:"space-between",alignItems:"center",flexWrap:"wrap"}},
+            h("span",{className:"mono",style:{fontSize:12}},
+              plural(elegidos.length,"seleccionado","seleccionados")),
+            h("div",{className:"row",style:{gap:8}},
+              h("button",{className:"btn sm",disabled:yendo,
+                onClick:function(){ mover(elegidos, "contador"); }},
+                "pasar al contador"),
+              h("button",{className:"btn sec sm",disabled:yendo,
+                onClick:function(){ mover(elegidos, "externa"); }},
+                "pasar a por fuera"),
+              h("button",{className:"lk",
+                onClick:function(){ setSel({}); }},"quitar selección"))))
+      : null,
 
     cta.sin_definir ? h("div",{className:"hint",style:{marginTop:12,
         color:"var(--ambar)"}},
