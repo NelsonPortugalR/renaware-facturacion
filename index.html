@@ -645,6 +645,43 @@ function App(props){
       return true;
     });
   }
+  function rehacerCronograma(oid, nuevas){
+    var pagadas = cuotas.filter(function(c){
+      return c.obligacion_id === oid && c.pagada_en; });
+    var yaPagadas = {};
+    pagadas.forEach(function(c){ yaPagadas[c.numero] = true; });
+    var aPoner = nuevas.filter(function(c){ return !yaPagadas[c.numero]; })
+      .map(function(c){
+        return {obligacion_id:oid, numero:c.numero, vence:c.vence, monto:c.monto};
+      });
+    /* Primero se borran las que no se pagaron; las pagadas no se tocan. */
+    return db.from("fact_obligacion_cuotas").delete()
+      .eq("obligacion_id", oid).is("pagada_en", null)
+      .then(function(r0){
+        if(r0.error){ avisar("No se pudo limpiar: " + r0.error.message); return false; }
+        if(!aPoner.length){
+          setCuotas(function(prev){ return prev.filter(function(c){
+            return c.obligacion_id !== oid || c.pagada_en; }); });
+          return true;
+        }
+        return db.from("fact_obligacion_cuotas").insert(aPoner).select()
+          .then(function(r){
+            if(r.error){ avisar("No se pudo guardar: " + r.error.message); return false; }
+            setCuotas(function(prev){
+              return prev.filter(function(c){
+                return c.obligacion_id !== oid || c.pagada_en;
+              }).concat(r.data);
+            });
+            setObligs(function(prev){ return prev.map(function(o){
+              return o.id===oid
+                ? Object.assign({}, o, {cuotas: pagadas.length + r.data.length})
+                : o; }); });
+            avisar("Cronograma reemplazado. Se conservaron " +
+              plural(pagadas.length,"cuota pagada","cuotas pagadas") + ".");
+            return true;
+          });
+      });
+  }
   function fraccionarDeuda(obl, filas, patchOrigen){
     return crearObligacion(obl, filas).then(function(ok){
       if(!ok) return false;
@@ -782,7 +819,8 @@ function App(props){
         rucsMudos:rucsMudos,marcarCuota:marcarCuota,ir:setVista}) : null,
       vista==="deudas" ? h(Deudas,{obligs:obligs,cuotas:cuotas,emisores:emisores,
         pagos:pagos,esMio:esMio,P:P,marcarCuota:marcarCuota,
-        crear:crearObligacion,pagar:registrarPago,fraccionar:fraccionarDeuda}) : null,
+        crear:crearObligacion,pagar:registrarPago,fraccionar:fraccionarDeuda,
+        rehacer:rehacerCronograma}) : null,
       vista==="ajustes" ? h(Ajustes,{emisores:emisores,receptores:receptores,
         reglas:reglas,cfg:cfg,personas:personas,esMio:esMio,
         guardarRegla:guardarRegla,actualizarRegla:actualizarRegla,
@@ -885,7 +923,7 @@ function PorFacturar(p){
   var s6 = useState(false), nueva = s6[0], setNueva = s6[1];
   var s7 = useState("todas"), amb = s7[0], setAmb = s7[1];
 
-  var todosGrupos = useMemo(function(){
+  var todosGruposRaw = useMemo(function(){
     var g = {};
     p.borradores.forEach(function(f){
       var per = p.P[f.persona_id];
@@ -898,6 +936,7 @@ function PorFacturar(p){
       return sb - sa;
     });
   },[p.borradores,p.P,q]);
+  var todosGrupos = todosGruposRaw;
 
   /* Quien no tiene RUC no puede facturar: es un trabajo distinto (conseguir
      el dato) y por eso va en su propia lista, no mezclado con lo accionable. */
@@ -966,11 +1005,23 @@ function PorFacturar(p){
       reglas:p.reglas,cfg:p.cfg,crear:p.crear,
       cerrar:function(){ setNueva(false); }}) : null,
 
-    h("div",{className:"hint",style:{marginBottom:14}},
-      corte
-        ? ("Actualizado con el reporte de Aurora del " + fechaCorta(corte) +
-           ". Lo posterior a esa fecha todavía no está acá.")
-        : "Falta registrar de cuándo es el último reporte de Aurora: sin eso no se sabe hasta dónde llega esta lista."),
+    (function(){
+      /* La pestaña cuenta comisiones y la lista muestra personas: si no se
+         dice, parece que faltan filas. */
+      var nCom = p.borradores.length;
+      var antig = corte ? -dias(corte) : null;
+      return h("div",{className:"hint",style:{marginBottom:14,lineHeight:1.8}},
+        plural(nCom,"comisión pendiente","comisiones pendientes") + " de " +
+        plural(todosGruposRaw.length,"persona","personas") + ". ",
+        h("br",null),
+        corte
+          ? h("span",{style:{color: antig > 21 ? "var(--ambar)" : "var(--ink40)"}},
+              "Actualizado con el reporte de Aurora del " + fechaCorta(corte) +
+              (antig > 21
+                ? " · hace " + antig + " días, conviene pedir el nuevo."
+                : ". Lo posterior a esa fecha todavía no está acá."))
+          : "Falta registrar de cuándo es el último reporte de Aurora: sin eso no se sabe hasta dónde llega esta lista.");
+    })(),
 
     verHechas ? h(YaFacturadas,{emitidas:p.emitidas,P:p.P,q:q,desmarcar:p.desmarcar}) :
     h("div",null,
@@ -2730,9 +2781,9 @@ function Emitir(p){
 
 /* ------------------------------------------------- cargar deuda y fraccionar */
 
-var MEDIOS = [["nps","NPS en banco"],["form1662","Formulario 1662"],
-  ["detraccion","Cuenta de detracción (BN)"],["tarjeta","Tarjeta"],
-  ["al_presentar","Al presentar la declaración"],
+var MEDIOS = [["yape","Yape"],["nps","NPS en banco"],
+  ["form1662","Formulario 1662"],["detraccion","Cuenta de detracción (BN)"],
+  ["tarjeta","Tarjeta"],["al_presentar","Al presentar la declaración"],
   ["transferencia","Transferencia"],["otro","Otro"]];
 var TRIBUTOS = [["1011","1011 · IGV"],["3121","3121 · Renta MYPE"],
   ["3042","3042 · Retención 4ta"],["8021","8021 · Fraccionamiento"],
@@ -2842,42 +2893,77 @@ function NuevaDeuda(p){
 
 function RegistrarPago(p){
   var g = p.g;
-  var s1 = useState(String(p.sugerido || "")), monto = s1[0], setMonto = s1[1];
-  var s2 = useState(hoyISO()), fecha = s2[0], setFecha = s2[1];
-  var s3 = useState("nps"), medio = s3[0], setMedio = s3[1];
-  var s4 = useState("pagado"), estado = s4[0], setEstado = s4[1];
-  var s5 = useState(""), ref = s5[0], setRef = s5[1];
-  var s6 = useState(false), yendo = s6[0], setYendo = s6[1];
+  var sug = p.sugerido || 0;
+  var s1 = useState(String(sug || "")), monto = s1[0], setMonto = s1[1];
+  var s2 = useState(String(sug || "")), cuota = s2[0], setCuota = s2[1];
+  var s3 = useState(hoyISO()), fecha = s3[0], setFecha = s3[1];
+  var s4 = useState("yape"), medio = s4[0], setMedio = s4[1];
+  var s5 = useState("pagado"), estado = s5[0], setEstado = s5[1];
+  var s6 = useState(""), form = s6[0], setForm = s6[1];
+  var s7 = useState(""), nps = s7[0], setNps = s7[1];
+  var s8 = useState(""), orden = s8[0], setOrden = s8[1];
+  var s9 = useState(""), oper = s9[0], setOper = s9[1];
+  var sA = useState(""), constancia = sA[0], setConstancia = sA[1];
+  var sB = useState(false), yendo = sB[0], setYendo = sB[1];
+
+  var m = Number(monto) || 0;
+  var c = Math.min(Number(cuota) || 0, m);
+  var interes = r2(m - c);
+
+  function setMontoYCuota(v){
+    setMonto(v);
+    var n = Number(v) || 0;
+    /* La cuota no cambia porque pagues de más: lo de más es interés. */
+    if(sug > 0) setCuota(String(Math.min(sug, n)));
+    else setCuota(v);
+  }
 
   function guardar(){
-    var m = Number(monto) || 0;
     if(m <= 0) return;
     setYendo(true);
     p.pagar({
       obligacion_id: g.o.id, cuota_numero: p.cuota || null,
       ruc: g.e.ruc, persona_id: g.e.persona_id || null,
-      anio: g.o.periodo_anio || Number(String(g.o.referencia).slice(-4)) ||
-            new Date().getFullYear(),
+      anio: g.o.periodo_anio || new Date().getFullYear(),
       mes: g.o.periodo_mes || 1,
       tributo: g.o.tipo === "fraccionamiento" ? "8021"
              : (g.o.tipo === "deuda_igv" ? "1011" : "otro"),
-      monto: m, estado: estado,
+      monto: r2(m), monto_cuota: r2(c), monto_interes: interes,
+      estado: estado,
       fecha_pago: estado === "pagado" ? fecha : null,
       pagar_hasta: estado === "nps" ? fecha : null,
-      medio: medio, referencia: ref || null
+      medio: medio,
+      formulario: form || null, nps: nps || null,
+      numero_orden: orden || null, numero_operacion: oper || null,
+      constancia_url: constancia || null
     }).then(function(ok){ setYendo(false); if(ok) p.cerrar(); });
   }
 
   return h("div",{style:{padding:"12px 14px",background:"var(--paper)",
       borderTop:"1px solid var(--rule)"}},
     h("div",{className:"dos",style:{gap:12}},
-      h(Campo,{label:"Monto",tipo:"number",value:monto,onChange:setMonto}),
+      h(Campo,{label:"Monto pagado",tipo:"number",value:monto,
+        onChange:setMontoYCuota,
+        nota: sug > 0 ? "la cuota es " + money(sug) : null}),
       h("label",{style:{display:"block"}},
         h("span",{className:"lbl"},"Cómo se pagó"),
         h("select",{className:"in",value:medio,
             onChange:function(e){ setMedio(e.target.value); }},
-          MEDIOS.map(function(m){
-            return h("option",{key:m[0],value:m[0]}, m[1]); })))),
+          MEDIOS.map(function(x){
+            return h("option",{key:x[0],value:x[0]}, x[1]); })))),
+
+    sug > 0 ? h("div",{className:"dos",style:{gap:12,marginTop:10}},
+      h(Campo,{label:"De eso, a la cuota",tipo:"number",value:cuota,
+        onChange:setCuota}),
+      h("div",null,
+        h("span",{className:"lbl"},"Interés o saldo"),
+        h("div",{className:"in mono",style:{background:"var(--paper)",
+          color: interes > 0 ? "var(--ambar)" : "var(--ink40)"}},
+          money(interes)),
+        h("div",{className:"hint",style:{marginTop:3}},
+          interes > 0 ? "lo que se pagó de más no amortiza la cuota"
+                      : "pago exacto"))) : null,
+
     h("div",{className:"dos",style:{gap:12,marginTop:10}},
       h("label",{style:{display:"block"}},
         h("span",{className:"lbl"},"Estado"),
@@ -2887,17 +2973,89 @@ function RegistrarPago(p){
           h("option",{value:"nps"},"NPS generado, todavía sin pagar"))),
       h(Campo,{label: estado === "pagado" ? "Fecha de pago" : "Pagar hasta",
         tipo:"date",value:fecha,onChange:setFecha})),
-    h("div",{style:{marginTop:10,maxWidth:320}},
-      h(Campo,{label:"N° de NPS, orden u operación",value:ref,onChange:setRef})),
-    estado === "nps" ? h("div",{className:"hint",style:{marginTop:8,
+
+    h("div",{className:"sep",style:{marginTop:14,paddingTop:12}},
+      h(Caps,null,"Cómo identificarlo en SOL"),
+      h("div",{className:"dos",style:{gap:12}},
+        h("label",{style:{display:"block"}},
+          h("span",{className:"lbl"},"Formulario"),
+          h("select",{className:"in",value:form,
+              onChange:function(e){ setForm(e.target.value); }},
+            h("option",{value:""},"— ninguno —"),
+            h("option",{value:"1662"},"1662 · pago de tributos"),
+            h("option",{value:"1663"},"1663 · boleta de pago"),
+            h("option",{value:"1683"},"1683 · arrendamiento"),
+            h("option",{value:"0621"},"0621 · al presentar"),
+            h("option",{value:"otro"},"Otro"))),
+        h(Campo,{label:"N° de NPS",value:nps,onChange:setNps,
+          ph:"0005028461901"})),
+      h("div",{className:"dos",style:{gap:12,marginTop:10}},
+        h(Campo,{label:"N° de orden",value:orden,onChange:setOrden,
+          ph:"1212461800",nota:"el de la transacción en SOL"}),
+        h(Campo,{label:"N° de operación",value:oper,onChange:setOper,
+          ph:"7853167096",nota:"el del banco o de Yape"})),
+      h("div",{style:{marginTop:10}},
+        h(Campo,{label:"Constancia",value:constancia,onChange:setConstancia,
+          ph:"enlace o ruta del PDF",
+          nota:"para no tener que volver a buscarla en SOL"}))),
+
+    estado === "nps" ? h("div",{className:"hint",style:{marginTop:10,
         color:"var(--ambar)"}},
       "Un NPS no es un pago: reserva el monto. No se descuenta hasta tener la constancia.") : null,
     medio === "detraccion" ? h("div",{className:"hint",style:{marginTop:8}},
       "El saldo de la cuenta de detracciones sólo sirve para pagar tributos; "+
       "tenerlo ahí puede impedir fraccionar.") : null,
-    h("div",{className:"row",style:{marginTop:12,gap:10}},
-      h("button",{className:"btn ok sm",disabled:yendo,onClick:guardar},
+
+    h("div",{className:"row",style:{marginTop:14,gap:10}},
+      h("button",{className:"btn ok sm",disabled:yendo || m<=0,onClick:guardar},
         yendo ? "guardando…" : "registrar"),
+      h("button",{className:"lk",onClick:p.cerrar},"cancelar")));
+}
+
+/* Cuando SUNAT recalcula un fraccionamiento, el cronograma viejo deja de
+   valer. Lo que no cambia es lo ya pagado: esas cuotas se conservan. */
+function RehacerCronograma(p){
+  var s1 = useState(""), crono = s1[0], setCrono = s1[1];
+  var s2 = useState(false), yendo = s2[0], setYendo = s2[1];
+  var s3 = useState(""), err = s3[0], setErr = s3[1];
+
+  var nuevas = useMemo(function(){ return leerCronograma(crono); },[crono]);
+  var pagadas = p.g.cs.filter(function(c){ return c.pagada_en; });
+  var choca = nuevas.filter(function(n){
+    return pagadas.some(function(c){ return c.numero === n.numero; });
+  });
+
+  function guardar(){
+    setErr("");
+    if(!nuevas.length){ setErr("No pude leer ninguna cuota."); return; }
+    setYendo(true);
+    p.rehacer(p.g.o.id, nuevas).then(function(ok){
+      setYendo(false);
+      if(ok) p.cerrar(); else setErr("No se pudo reemplazar.");
+    });
+  }
+
+  return h("div",{style:{padding:"12px 14px",background:"var(--paper)",
+      borderTop:"1px solid var(--rule)"}},
+    h("div",{className:"hint",style:{marginBottom:10,lineHeight:1.7}},
+      "Pega el cronograma nuevo del RI. Las cuotas ya pagadas se conservan tal "+
+      "como están; se reemplazan sólo las que faltan."),
+    h("textarea",{className:"in mono",rows:5,value:crono,style:{fontSize:12},
+      placeholder:"1 30/11/2026 306.00 14.00 320.00 1,243.00",
+      onChange:function(e){ setCrono(e.target.value); }}),
+    nuevas.length ? h("div",{className:"hint",style:{marginTop:8,lineHeight:1.7}},
+      "Leí " + plural(nuevas.length,"cuota","cuotas") + " · suman " +
+      money(r2(nuevas.reduce(function(s,c){ return s+c.monto; },0))),
+      pagadas.length
+        ? h("div",null, "Se conservan " + plural(pagadas.length,"cuota pagada","cuotas pagadas") +
+            (choca.length ? " · " + plural(choca.length,"cuota del cronograma nuevo","cuotas del cronograma nuevo") +
+              " se ignoran porque esos números ya están pagados" : ""))
+        : null) : null,
+    err ? h("div",{className:"mono",style:{fontSize:11,color:"var(--alerta)",
+      marginTop:8}}, err) : null,
+    h("div",{className:"row",style:{marginTop:12,gap:10}},
+      h("button",{className:"btn sm",disabled:yendo,onClick:guardar},
+        yendo ? "guardando…" : "reemplazar el cronograma"),
       h("button",{className:"lk",onClick:p.cerrar},"cancelar")));
 }
 
@@ -3142,7 +3300,11 @@ function Deudas(p){
             !esFrac ? h("button",{className:"lk",onClick:function(){
               setAccion(accion && accion.id===g.o.id && accion.tipo==="frac"
                 ? null : {id:g.o.id, tipo:"frac"}); }},
-              "fraccionar el saldo") : null),
+              "fraccionar el saldo") : null,
+            esFrac ? h("button",{className:"lk",onClick:function(){
+              setAccion(accion && accion.id===g.o.id && accion.tipo==="rehacer"
+                ? null : {id:g.o.id, tipo:"rehacer"}); }},
+              "SUNAT lo recalculó") : null),
 
           (function(){
             var ps = pagosDe(g.o.id);
@@ -3155,9 +3317,20 @@ function Deudas(p){
                 return h("div",{key:i,style:{color: x.estado==="pagado"
                     ? "var(--verde)" : "var(--ambar)"}},
                   (x.estado==="pagado" ? "Pagado " : "NPS por ") + money(x.monto) +
+                  (Number(x.monto_interes) > 0
+                    ? " (" + money(x.monto_cuota) + " de cuota + " +
+                      money(x.monto_interes) + " de interés)" : "") +
                   (med ? " · " + med[1] : "") +
+                  (x.formulario ? " · Form. " + x.formulario : "") +
                   (x.fecha_pago ? " · " + fechaCorta(x.fecha_pago) : "") +
-                  (x.referencia ? " · " + x.referencia : ""));
+                  (x.nps ? " · NPS " + x.nps : "") +
+                  (x.numero_orden ? " · orden " + x.numero_orden : "") +
+                  (x.numero_operacion ? " · op. " + x.numero_operacion : "") +
+                  (x.referencia ? " · " + x.referencia : ""),
+                  x.constancia_url
+                    ? h("a",{href:x.constancia_url,target:"_blank",
+                        rel:"noopener noreferrer",className:"lk",
+                        style:{marginLeft:6}},"constancia") : null);
               }),
               pag > 0 && pag < g.saldo
                 ? h("div",{style:{marginTop:3}},
@@ -3177,6 +3350,9 @@ function Deudas(p){
           ? h(RegistrarPago,{g:g,pagar:p.pagar,
               sugerido: g.prox ? g.prox.monto : g.saldo,
               cuota: esFrac && g.prox ? g.prox.numero : null,
+              cerrar:function(){ setAccion(null); }}) : null,
+        accion && accion.id === g.o.id && accion.tipo === "rehacer"
+          ? h(RehacerCronograma,{g:g,rehacer:p.rehacer,
               cerrar:function(){ setAccion(null); }}) : null,
         accion && accion.id === g.o.id && accion.tipo === "frac"
           ? h(Fraccionar,{g:g,fraccionar:p.fraccionar,

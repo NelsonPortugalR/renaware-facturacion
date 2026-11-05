@@ -360,6 +360,26 @@ setTimeout(async () => {
   ok("deuda: deja agregar una deuda nueva", /agregar una deuda/.test(TD));
   ok("deuda: deja registrar un pago", /registrar un pago/.test(TD));
   ok("deuda: deja fraccionar el saldo", /fraccionar el saldo/.test(TD));
+  ok("deuda: deja rehacer el cronograma si SUNAT lo recalcula",
+    /SUNAT lo recalculó/.test(TD));
+  {
+    const b = [...doc.querySelectorAll("button.lk")]
+      .find(x => x.textContent === "registrar un pago");
+    b.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await pausa(80);
+    const TP = txt();
+    ok("el pago separa la cuota del interés",
+      /De eso, a la cuota/.test(TP) && /Interés o saldo/.test(TP));
+    ok("el pago pide formulario, NPS, orden y operación",
+      /Formulario/.test(TP) && /N° de NPS/.test(TP) &&
+      /N° de orden/.test(TP) && /N° de operación/.test(TP));
+    ok("ofrece Yape como medio", /Yape/.test(TP));
+    ok("ofrece los formularios que usa SUNAT",
+      /1662/.test(TP) && /1663/.test(TP) && /1683/.test(TP));
+    ok("deja guardar la constancia", /Constancia/.test(TP));
+    b.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await pausa(60);
+  }
   ok("deuda: muestra el pago hecho con la cuenta de detracción",
     /Cuenta de detracción/.test(TD));
   ok("deuda: dice cuánto queda por cubrir tras el pago parcial",
@@ -485,6 +505,9 @@ setTimeout(async () => {
   ok("ofrece con RUC / sin RUC", /Con RUC/.test(T2) && /Sin RUC/.test(T2));
   ok("avisa que falta la fecha del reporte de Aurora",
     /último reporte de Aurora/.test(T2));
+  /* la pestaña cuenta comisiones y la lista muestra personas: hay que decirlo */
+  ok("dice cuántas comisiones y de cuántas personas",
+    /comisiones pendientes de/.test(T2) || /comisión pendiente de/.test(T2));
   ok("arranca en los que sí se pueden facturar",
     /ANA PRUEBA UNO/.test(T2) && !/BEA PRUEBA DOS/.test(T2));
   const checks = [...doc.querySelectorAll('input[type=checkbox]')];
