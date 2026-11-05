@@ -263,6 +263,7 @@ function App(props){
   var s7 = useState([]), gastos = s7[0], setGastos = s7[1];
   var s8 = useState("agenda"), vista = s8[0], setVista = s8[1];
   var s9 = useState(null), aviso = s9[0], setAviso = s9[1];
+  var sH = useState(null), verPersona = sH[0], setVerPersona = sH[1];
   var sA = useState(null), errCarga = sA[0], setErrCarga = sA[1];
   var sB = useState([]), emisores = sB[0], setEmisores = sB[1];
   var sC = useState([]), receptores = sC[0], setReceptores = sC[1];
@@ -507,8 +508,15 @@ function App(props){
       var atras = (porOb[o.id]||[]).filter(function(c){
         return !c.pagada_en && dias(c.vence) < 0;
       }).length;
-      if(atras > 0) out.push({ref:o.referencia,
-        emisor:(em[o.emisor_id]||{}).nombre || "\u2014", atrasadas:atras});
+      if(atras > 0){
+        var sigue = (porOb[o.id]||[]).filter(function(c){
+          return !c.pagada_en && dias(c.vence) >= 0;
+        }).sort(function(a,b){ return a.vence < b.vence ? -1 : 1; })[0];
+        out.push({ref:o.referencia,
+          emisor:(em[o.emisor_id]||{}).nombre || "\u2014", atrasadas:atras,
+          proxima: sigue ? dias(sigue.vence) : null,
+          proximaFecha: sigue ? sigue.vence : null});
+      }
     });
     return out;
   },[emisores,obligs,cuotas]);
@@ -581,11 +589,11 @@ function App(props){
         });
       });
   }
-  function marcarFacturadas(ids, fecha, serie, numero){
-    return db.from("fact_facturas").update({
+  function marcarFacturadas(ids, fecha, serie, numero, extra){
+    return db.from("fact_facturas").update(Object.assign({
       estado:"emitida", fecha_emision:fecha, fecha_estimada:false,
       serie:serie||null, numero:numero||null, actualizado_en:new Date().toISOString()
-    }).in("id", ids).select().then(function(r){
+    }, extra||{})).in("id", ids).select().then(function(r){
       if(r.error){ avisar("No se pudo marcar: " + r.error.message); return; }
       var m = {}; r.data.forEach(function(f){ m[f.id] = f; });
       setFacturas(function(prev){ return prev.map(function(f){ return m[f.id] || f; }); });
@@ -719,6 +727,22 @@ function App(props){
         return true;
       });
   }
+  function crearReceptor(fila){
+    return db.from("fact_receptores").insert(fila).select().then(function(r){
+      if(r.error){ avisar("No se pudo guardar: " + r.error.message); return false; }
+      setReceptores(function(p){ return p.concat(r.data); });
+      avisar(r.data[0].razon_social + " cargado como receptor.");
+      return true;
+    });
+  }
+  function crearEmisor(fila){
+    return db.from("fact_emisores").insert(fila).select().then(function(r){
+      if(r.error){ avisar("No se pudo guardar: " + r.error.message); return false; }
+      setEmisores(function(p){ return p.concat(r.data); });
+      avisar(r.data[0].nombre + " cargado como emisor.");
+      return true;
+    });
+  }
   function guardarRegla(fila){
     return db.from("fact_reglas_emision").insert(fila).select()
       .then(function(r){
@@ -825,18 +849,21 @@ function App(props){
         reglas:reglas,cfg:cfg,personas:personas,esMio:esMio,
         guardarRegla:guardarRegla,actualizarRegla:actualizarRegla,
         guardarContabilidad:guardarContabilidad,
-        moverContabilidad:moverContabilidad}) : null,
+        moverContabilidad:moverContabilidad,
+        crearReceptor:crearReceptor,crearEmisor:crearEmisor}) : null,
       vista==="resumen" ? h(Resumen,{personas:personas,emitidas:emitidas,
         borradores:borradores,totFact:totFact,totPend:totPend,sinRuc:sinRuc,
         oblig:oblig,obPend:obPend,vencidas:vencidas,ir:setVista}) : null,
       vista==="facturar" ? h(PorFacturar,{borradores:borradores,emitidas:emitidas,
         P:P,cfg:cfg,esMio:esMio,emisores:emisores,receptores:receptores,
         reglas:reglas,crear:crearPendiente,
+        irAPadron:function(pid){ setVerPersona(pid); setVista("padron"); },
         marcar:marcarFacturadas,desmarcar:desmarcar}) : null,
       vista==="declaraciones" ? h(Declaraciones,{oblig:oblig,esMio:esMio,
         emitidas:emitidas,P:P,dmap:dmap,guardarAnual:guardarAnual,
         guardar:guardarDecl,guardarVarias:guardarVarias,avisar:avisar}) : null,
       vista==="padron" ? h(Padron,{personas:personas,facturas:facturas,
+        abrirId:verPersona, visto:function(){ setVerPersona(null); },
         guardar:guardarPersona}) : null,
       vista==="anual" ? h(Anual,{personas:personas,emitidas:emitidas,oblig:oblig,
         esMio:esMio,
@@ -914,6 +941,72 @@ function Resumen(p){
 }
 
 /* ---------------------------------------------------------------- por facturar */
+/* Todo lo que hace falta para emitir esa factura, en un solo lugar: a quién,
+   con qué glosa, por cuánto y a qué cuenta va la detracción. Antes había que
+   ir a buscar cada pieza a otra pantalla. */
+function DetalleLinea(p){
+  var f = p.f, e = p.emisor || {}, r = p.receptor || {};
+  var g = p.regla;
+  var pct = g && g.detraccion_pct != null ? Number(g.detraccion_pct) : null;
+  var umbral = g && g.detraccion_umbral != null ? Number(g.detraccion_umbral) : null;
+  var total = Number(f.total);
+  var detr = Number(f.detraccion) || 0;
+  var aplica = detr > 0;
+
+  var Fila = function(l, v, nota){
+    return h("div",{style:{display:"flex",justifyContent:"space-between",
+        gap:12,padding:"5px 0",alignItems:"baseline"}},
+      h("div",{style:{fontSize:12,color:"var(--ink70)"}}, l,
+        nota ? h("div",{className:"hint",style:{marginTop:1}}, nota) : null),
+      h("span",{className:"mono",style:{fontSize:12,textAlign:"right"}}, v));
+  };
+
+  return h("div",{style:{padding:"10px 14px 12px 44px",
+      background:"var(--paper)",borderTop:"1px solid var(--rule)"}},
+    h("div",{className:"dos",style:{gap:18}},
+      h("div",null,
+        h(Caps,null,"A quién se le factura"),
+        Fila("Receptor", r.razon_social || "— sin receptor —"),
+        Fila("RUC", r.ruc || "—"),
+        h("div",{style:{marginTop:8}},
+          h("span",{className:"lbl"},"Glosa"),
+          h("div",{className:"card",style:{padding:"7px 10px",fontSize:12,
+            lineHeight:1.5}}, f.descripcion || "—"))),
+      h("div",null,
+        h(Caps,null,"Importes"),
+        Fila("Valor de venta", money(f.neto)),
+        Fila("IGV 18%", money(f.igv)),
+        Fila("Total", money(total)),
+        aplica
+          ? Fila("Detracción " + (pct != null ? Math.round(pct*100) + "%" : ""),
+              "− " + money(detr),
+              "bien " + ((g && g.codigo_bien) || "037"))
+          : Fila("Detracción", "no aplica",
+              umbral ? "el total no pasa de " + money(umbral) : null),
+        Fila("Cae al banco", money(r2(total - detr))))),
+
+    h("div",{className:"sep",style:{marginTop:12,paddingTop:10}},
+      h("div",{className:"dos",style:{gap:18}},
+        h("div",null,
+          h("span",{className:"lbl"},"Cuenta para el depósito"),
+          h("div",{className:"mono",style:{fontSize:12}},
+            e.cci ? ("CCI " + e.cci) : "sin CCI"),
+          e.banco || e.cuenta_bancaria
+            ? h("div",{className:"hint"},
+                (e.banco || "") + (e.cuenta_bancaria ? " " + e.cuenta_bancaria : ""))
+            : null),
+        aplica ? h("div",null,
+          h("span",{className:"lbl"},"Cuenta de detracciones (BN)"),
+          e.cuenta_detraccion
+            ? h("div",{className:"mono",style:{fontSize:12}}, e.cuenta_detraccion)
+            : h("div",{className:"mono",style:{fontSize:12,color:"var(--alerta)"}},
+                "falta · sin ella no se puede depositar"),
+          !e.cuenta_detraccion && p.irACuentas
+            ? h("button",{className:"lk",style:{marginTop:3},
+                onClick:function(){ p.irACuentas(f.persona_id); }},
+                "cargar la cuenta") : null) : null)));
+}
+
 function PorFacturar(p){
   var s1 = useState({}), sel = s1[0], setSel = s1[1];
   var s2 = useState(""), q = s2[0], setQ = s2[1];
@@ -922,6 +1015,13 @@ function PorFacturar(p){
   var s5 = useState("con"), filtro = s5[0], setFiltro = s5[1];
   var s6 = useState(false), nueva = s6[0], setNueva = s6[1];
   var s7 = useState("todas"), amb = s7[0], setAmb = s7[1];
+  var s8 = useState(null), abierta = s8[0], setAbierta = s8[1];
+  var EMI = useMemo(function(){
+    var m = {}; (p.emisores||[]).forEach(function(e){ m[e.id] = e; }); return m;
+  },[p.emisores]);
+  var REC = useMemo(function(){
+    var m = {}; (p.receptores||[]).forEach(function(r){ m[r.id] = r; }); return m;
+  },[p.receptores]);
 
   var todosGruposRaw = useMemo(function(){
     var g = {};
@@ -1062,20 +1162,39 @@ function PorFacturar(p){
                 "marcar todas"))),
           g.fs.map(function(f){
             var bloq = bloqueo(per, f);
-            return h("div",{key:f.id,style:{padding:"8px 14px",display:"flex",
-                alignItems:"center",gap:10,borderTop:"1px solid var(--rule)"}},
-              h("input",{type:"checkbox",checked:!!sel[f.id],disabled:!!bloq,
-                onChange:function(){ alternar(f.id); }}),
-              h("div",{style:{flex:1,minWidth:0}},
-                h("div",{className:"mono",style:{fontSize:11}},
-                  "semana "+f.etiqueta_semana+" · PB"+((f.periodo_ind%26)+1)),
-                bloq ? h("div",{className:"mono",style:{fontSize:10,
-                  color:"var(--alerta)"}}, bloq) : null),
-              h("div",{style:{textAlign:"right"}},
-                h("div",{className:"mono",style:{fontSize:13}}, money(f.total)),
-                h("div",{className:"hint"},
-                  "neto "+money(f.neto)+
-                  (Number(f.detraccion)>0 ? " · detr "+money(f.detraccion) : ""))));
+            return h("div",{key:f.id},
+              h("div",{style:{padding:"8px 14px",display:"flex",
+                  alignItems:"center",gap:10,borderTop:"1px solid var(--rule)"}},
+                h("input",{type:"checkbox",checked:!!sel[f.id],disabled:!!bloq,
+                  onChange:function(){ alternar(f.id); }}),
+                h("div",{style:{flex:1,minWidth:0}},
+                  h("div",{className:"mono",style:{fontSize:11}},
+                    f.etiqueta_semana
+                      ? ("semana "+f.etiqueta_semana+
+                         (f.periodo_ind != null ? " · PB"+((f.periodo_ind%26)+1) : ""))
+                      : (f.descripcion ? f.descripcion.slice(0,46) : "sin semana")),
+                  bloq ? h("div",{className:"mono",style:{fontSize:10,
+                    color:"var(--alerta)"}},
+                    bloq,
+                    bloq.indexOf("detracción") >= 0 && p.irAPadron
+                      ? h("button",{className:"lk",style:{marginLeft:6},
+                          onClick:function(e){ e.stopPropagation();
+                            p.irAPadron(f.persona_id); }},"cargarla") : null)
+                    : null),
+                h("div",{style:{textAlign:"right"}},
+                  h("div",{className:"mono",style:{fontSize:13}}, money(f.total)),
+                  h("div",{className:"hint"},
+                    "neto "+money(f.neto)+
+                    (Number(f.detraccion)>0 ? " · detr "+money(f.detraccion) : ""))),
+                h("button",{className:"lk",style:{minWidth:54,textAlign:"right"},
+                  onClick:function(){ setAbierta(abierta===f.id ? null : f.id); }},
+                  abierta===f.id ? "cerrar" : "detalle")),
+              abierta === f.id
+                ? h(DetalleLinea,{f:f, emisor:EMI[f.emisor_id],
+                    receptor:REC[f.receptor_id],
+                    regla:reglaDe(p.reglas||[], f.emisor_id, f.receptor_id),
+                    irACuentas:p.irAPadron})
+                : null);
           }));
       }),
       elegidas.length ? h("div",{style:{position:"sticky",bottom:0,padding:"12px 0"}},
@@ -1087,8 +1206,8 @@ function PorFacturar(p){
             "Marcar como facturadas"))) : null))),
 
     modal ? h(ModalFacturar,{n:elegidas.length,onCerrar:function(){ setModal(false); },
-      onOk:function(fecha,serie,numero){
-        p.marcar(elegidas, fecha, serie, numero).then(function(){
+      onOk:function(fecha,serie,numero,extra){
+        p.marcar(elegidas, fecha, serie, numero, extra).then(function(){
           setSel({}); setModal(false);
         });
       }}) : null);
@@ -1208,26 +1327,48 @@ function ModalFacturar(p){
   var s1 = useState(hoyISO()), fecha = s1[0], setFecha = s1[1];
   var s2 = useState("E001"), serie = s2[0], setSerie = s2[1];
   var s3 = useState(""), num = s3[0], setNum = s3[1];
+  var s4 = useState(""), oper = s4[0], setOper = s4[1];
+  var s5 = useState(""), pdf = s5[0], setPdf = s5[1];
+  var s6 = useState(""), xml = s6[0], setXml = s6[1];
+  var una = p.n === 1;
+  /* Con una sola se guarda el numero; con varias no, porque cada factura
+     tiene el suyo y poner el mismo en todas seria inventar datos. */
+  var falta = una && !num;
+
   return h(Modal,{onClose:p.onCerrar},
     h("div",{style:{padding:"18px 20px",borderBottom:"1px solid var(--rule)"}},
       h("div",{style:{fontSize:16,fontWeight:600}},
-        "Marcar "+p.n+" comisión(es) como facturadas"),
+        una ? "Registrar la factura emitida"
+            : "Marcar " + p.n + " comisiones como facturadas"),
       h("div",{className:"hint",style:{marginTop:4}},
         "La fecha decide en qué mes entra la declaración.")),
     h("div",{style:{padding:"18px 20px"}},
-      h("div",{style:{display:"grid",gap:12,
-        gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))"}},
-        h(Campo,{label:"Fecha de emisión",tipo:"date",value:fecha,onChange:setFecha}),
-        h(Campo,{label:"Serie",value:serie,onChange:setSerie,ph:"E001"}),
-        h(Campo,{label:"Número (opcional)",value:num,onChange:setNum,ph:"12"})),
-      h("div",{className:"hint",style:{marginTop:12}},
-        p.n > 1 ? "Si son de semanas distintas y emitiste una factura por semana, "+
-          "márcalas de a una para guardar cada número." : "")),
+      h("div",{className:"dos",style:{gap:12}},
+        h(Campo,{label:"Fecha de emisión",tipo:"date",value:fecha,onChange:setFecha,
+          nota:"la real, la que dice el comprobante"}),
+        h(Campo,{label:"Serie",value:serie,onChange:setSerie,ph:"E001"})),
+      una ? h("div",{className:"dos",style:{gap:12,marginTop:12}},
+        h(Campo,{label:"Número",value:num,onChange:setNum,ph:"564",
+          nota: falta ? "hace falta para poder buscarla después" : null}),
+        h(Campo,{label:"N° de operación SEE-SOL",value:oper,onChange:setOper,
+          nota:"el que devuelve SOL al emitir"})) : null,
+      una ? h("div",{className:"dos",style:{gap:12,marginTop:12}},
+        h(Campo,{label:"PDF",value:pdf,onChange:setPdf,ph:"enlace o ruta"}),
+        h(Campo,{label:"XML",value:xml,onChange:setXml,ph:"enlace o ruta"})) : null,
+      !una ? h("div",{className:"card hint",style:{padding:"10px 13px",
+          marginTop:14,lineHeight:1.7}},
+        "Cada factura tiene su propio número, así que en bloque no se guarda "+
+        "ninguno: quedarían todas con el mismo, que sería falso. Si emitiste "+
+        "una factura por semana, márcalas de a una y se guarda el número de "+
+        "cada una.") : null),
     h("div",{style:{padding:"14px 20px",borderTop:"1px solid var(--rule)",
         display:"flex",justifyContent:"flex-end",gap:8}},
       h("button",{className:"btn sec",onClick:p.onCerrar},"Cancelar"),
-      h("button",{className:"btn ok",disabled:!fecha,
-        onClick:function(){ p.onOk(fecha, serie, num); }},"Confirmar")));
+      h("button",{className:"btn ok",disabled:!fecha || falta,
+        onClick:function(){
+          p.onOk(fecha, serie, num, {numero_operacion:oper||null,
+            comprobante_url:pdf||null, xml_url:xml||null});
+        }}, falta ? "Falta el número" : "Confirmar")));
 }
 
 function YaFacturadas(p){
@@ -1248,7 +1389,7 @@ function YaFacturadas(p){
           h("div",{className:"hint"},
             "semana "+f.etiqueta_semana+
             (f.serie ? " · "+f.serie+"-"+(f.numero||"?") : "")+
-            " · "+f.fecha_emision+(f.fecha_estimada?" ~":""))),
+            " · "+fechaCorta(f.fecha_emision)+(f.fecha_estimada?" ~":""))),
         h("div",{style:{textAlign:"right"}},
           h("div",{className:"mono",style:{fontSize:13}}, money(f.total)),
           h("button",{className:"lk",style:{color:"var(--ink40)"},
@@ -1631,7 +1772,7 @@ function FilaDecl(p){
           " · "+plural(o.facturas,"factura","facturas"))),
       h("div",{className:"mono",style:{fontSize:11,
           color: o.sinCronograma ? "var(--ambar)" : color}},
-        o.vence ? ("vence "+o.vence+(d<0?" · vencida hace "+(-d)+"d":
+        o.vence ? ("vence "+fechaCorta(o.vence)+(d<0?" · vencida hace "+(-d)+"d":
           d===0?" · hoy":" · faltan "+d+"d"))
           : "venció el mes siguiente · día por confirmar en SUNAT")),
 
@@ -1871,6 +2012,15 @@ function Padron(p){
   var s1 = useState(""), q = s1[0], setQ = s1[1];
   var s2 = useState("todos"), filtro = s2[0], setFiltro = s2[1];
   var s3 = useState(null), abierta = s3[0], setAbierta = s3[1];
+  /* Cuando otra pantalla dice "a esta persona le falta un dato", se llega
+     directo a su ficha en vez de volver a buscarla. */
+  useEffect(function(){
+    if(!p.abrirId) return;
+    for(var i=0;i<p.personas.length;i++){
+      if(p.personas[i].id === p.abrirId){ setAbierta(p.personas[i]); break; }
+    }
+    if(p.visto) p.visto();
+  },[p.abrirId]);
 
   var conFacturas = useMemo(function(){
     var m = {};
@@ -1910,7 +2060,10 @@ function Padron(p){
             alignItems:"center",borderTop:i?"1px solid var(--rule)":"none",
             opacity:x.activo?1:.55}},
           h("div",{style:{minWidth:0}},
-            h("div",{style:{fontSize:13,fontWeight:600}}, x.nombre,
+            h("button",{style:{background:"none",border:0,padding:0,
+                textAlign:"left",fontSize:13,fontWeight:600,color:"var(--ink)",
+                fontFamily:"inherit"},
+                onClick:function(){ setAbierta(x); }}, x.nombre,
               !x.activo ? h("span",{className:"hint"}," · desactivado") : null),
             h("div",{className:"hint"},
               (x.codigo_asesor||"sin código")+
@@ -2302,7 +2455,13 @@ function Agenda(p){
           r.emisor + " · " + r.ref,
           h("div",{className:"hint",style:{marginTop:2}},
             r.atrasadas === 1
-              ? "1 cuota vencida sin pagar. Con dos consecutivas se pierde el fraccionamiento (Art. 36)."
+              ? ("1 cuota vencida sin pagar" +
+                 (r.proxima != null
+                   ? " y la siguiente vence " + (r.proxima === 0 ? "hoy"
+                       : "en " + plural(r.proxima,"día","días")) +
+                     " (" + fechaCorta(r.proximaFecha) + "). " +
+                     "Si esa también se pasa, son dos consecutivas y se pierde el fraccionamiento (Art. 36)."
+                   : ". Con dos consecutivas se pierde el fraccionamiento (Art. 36)."))
               : r.atrasadas + " cuotas vencidas. El fraccionamiento ya puede darse por perdido; conviene verificar en SUNAT hoy."));
       })) : null,
 
@@ -2444,16 +2603,152 @@ function calcular(regla, neto, cfg){
 /* Lo que se configura una vez y casi no se toca: las reglas de emisión y
    quién lleva la contabilidad de cada quien. */
 
+/* Alta de emisores y receptores. Sin esto, un cliente nuevo no se podía
+   cargar y la factura no se podía preparar en el sistema. */
+function Altas(p){
+  var s1 = useState("receptor"), que = s1[0], setQue = s1[1];
+  var VR = {ruc:"", razon_social:"", correo_facturacion:"", contacto:""};
+  var VE = {ruc:"", nombre:"", tipo:"persona", relacion:"asesor", regimen:"RMT",
+            serie_default:"E001", banco:"", cuenta_bancaria:"", cci:"",
+            cuenta_detraccion:""};
+  var s2 = useState(VR), fr = s2[0], setFr = s2[1];
+  var s3 = useState(VE), fe = s3[0], setFe = s3[1];
+  var s4 = useState(""), err = s4[0], setErr = s4[1];
+  var s5 = useState(false), yendo = s5[0], setYendo = s5[1];
+
+  function setR(k){ return function(v){
+    setFr(function(x){ var n=Object.assign({},x); n[k]=v; return n; }); }; }
+  function setE(k){ return function(v){
+    setFe(function(x){ var n=Object.assign({},x); n[k]=v; return n; }); }; }
+
+  var rucR = String(fr.ruc||"").replace(/\D/g,"");
+  var rucE = String(fe.ruc||"").replace(/\D/g,"");
+  var okR = rucR.length === 11 ? rucValido(rucR) : null;
+  var okE = rucE.length === 11 ? rucValido(rucE) : null;
+
+  function guardarReceptor(){
+    setErr("");
+    if(rucR.length !== 11 || !fr.razon_social){
+      setErr("Falta el RUC de 11 dígitos o la razón social."); return; }
+    if(p.receptores.some(function(x){ return x.ruc === rucR; })){
+      setErr("Ese RUC ya está cargado como receptor."); return; }
+    setYendo(true);
+    p.crearReceptor({ruc:rucR, razon_social:fr.razon_social,
+      correo_facturacion:fr.correo_facturacion||null,
+      contacto:fr.contacto||null, activo:true}).then(function(ok){
+        setYendo(false);
+        if(ok) setFr(VR); else setErr("No se pudo guardar.");
+      });
+  }
+  function guardarEmisor(){
+    setErr("");
+    if(rucE.length !== 11 || !fe.nombre){
+      setErr("Falta el RUC de 11 dígitos o el nombre."); return; }
+    if(p.emisores.some(function(x){ return x.ruc === rucE; })){
+      setErr("Ese RUC ya está cargado como emisor."); return; }
+    setYendo(true);
+    p.crearEmisor(Object.assign({}, fe, {ruc:rucE, activo:true,
+      banco:fe.banco||null, cuenta_bancaria:fe.cuenta_bancaria||null,
+      cci:fe.cci||null, cuenta_detraccion:fe.cuenta_detraccion||null}))
+      .then(function(ok){
+        setYendo(false);
+        if(ok) setFe(VE); else setErr("No se pudo guardar.");
+      });
+  }
+
+  return h("div",null,
+    h("div",{className:"row",style:{gap:8,marginBottom:16}},
+      [["receptor","Receptor nuevo"],["emisor","Emisor nuevo"]].map(function(x){
+        return h("button",{key:x[0],className:"chip"+(que===x[0]?" on":""),
+          onClick:function(){ setQue(x[0]); setErr(""); }}, x[1]);
+      })),
+
+    que === "receptor"
+      ? h("div",{className:"card",style:{padding:"16px 18px",maxWidth:620}},
+          h(Caps,null,"A quién se le factura"),
+          h("div",{className:"dos",style:{gap:12}},
+            h(Campo,{label:"RUC",value:fr.ruc,onChange:setR("ruc"),
+              ph:"20100131863",
+              nota: rucR.length === 11
+                ? (okR ? "válido" : "no pasa el dígito verificador")
+                : "11 dígitos"}),
+            h(Campo,{label:"Razón social",value:fr.razon_social,
+              onChange:setR("razon_social"),ph:"NUTRICION Y SALUD S.A.C."})),
+          h("div",{className:"dos",style:{gap:12,marginTop:12}},
+            h(Campo,{label:"Correo de facturación",value:fr.correo_facturacion,
+              onChange:setR("correo_facturacion"),
+              nota:"a dónde se le manda el comprobante"}),
+            h(Campo,{label:"Contacto",value:fr.contacto,
+              onChange:setR("contacto")})),
+          err ? h("div",{className:"mono",style:{fontSize:11,
+            color:"var(--alerta)",marginTop:10}}, err) : null,
+          h("div",{className:"row",style:{marginTop:14,gap:10}},
+            h("button",{className:"btn",disabled:yendo,onClick:guardarReceptor},
+              yendo ? "guardando…" : "guardar receptor")),
+          h("div",{className:"hint",style:{marginTop:10}},
+            "Después hay que darle una regla de emisión, si no se calcula con "+
+            "lo genérico: IGV 18% y detracción 10% sobre S/700."))
+
+      : h("div",{className:"card",style:{padding:"16px 18px",maxWidth:620}},
+          h(Caps,null,"Quién emite"),
+          h("div",{className:"dos",style:{gap:12}},
+            h(Campo,{label:"RUC",value:fe.ruc,onChange:setE("ruc"),
+              nota: rucE.length === 11
+                ? (okE ? "válido" : "no pasa el dígito verificador")
+                : "11 dígitos"}),
+            h(Campo,{label:"Nombre o razón social",value:fe.nombre,
+              onChange:setE("nombre")})),
+          h("div",{className:"dos",style:{gap:12,marginTop:12}},
+            h("label",{style:{display:"block"}},
+              h("span",{className:"lbl"},"Tipo"),
+              h("select",{className:"in",value:fe.tipo,
+                  onChange:function(e){ setE("tipo")(e.target.value); }},
+                h("option",{value:"persona"},"Persona natural"),
+                h("option",{value:"empresa"},"Empresa"))),
+            h("label",{style:{display:"block"}},
+              h("span",{className:"lbl"},"Relación"),
+              h("select",{className:"in",value:fe.relacion,
+                  onChange:function(e){ setE("relacion")(e.target.value); }},
+                h("option",{value:"asesor"},"Asesor del equipo"),
+                h("option",{value:"propio"},"RUC propio"),
+                h("option",{value:"externo"},"Fuera de la organización")))),
+          h("div",{className:"dos",style:{gap:12,marginTop:12}},
+            h(Campo,{label:"Régimen",value:fe.regimen,onChange:setE("regimen"),
+              ph:"RMT"}),
+            h(Campo,{label:"Serie",value:fe.serie_default,
+              onChange:setE("serie_default"),ph:"E001"})),
+          h("div",{className:"dos",style:{gap:12,marginTop:12}},
+            h(Campo,{label:"Banco",value:fe.banco,onChange:setE("banco")}),
+            h(Campo,{label:"Cuenta",value:fe.cuenta_bancaria,
+              onChange:setE("cuenta_bancaria")})),
+          h("div",{className:"dos",style:{gap:12,marginTop:12}},
+            h(Campo,{label:"CCI",value:fe.cci,onChange:setE("cci")}),
+            h(Campo,{label:"Cuenta de detracción (BN)",value:fe.cuenta_detraccion,
+              onChange:setE("cuenta_detraccion"),
+              nota:"obligatoria si va a facturar más de S/700"})),
+          err ? h("div",{className:"mono",style:{fontSize:11,
+            color:"var(--alerta)",marginTop:10}}, err) : null,
+          h("div",{className:"row",style:{marginTop:14,gap:10}},
+            h("button",{className:"btn",disabled:yendo,onClick:guardarEmisor},
+              yendo ? "guardando…" : "guardar emisor")),
+          h("div",{className:"hint",style:{marginTop:10}},
+            "Marcar “RUC propio” lo pone en el grupo “Míos” de todas las "+
+            "pantallas. Los asesores del equipo se crean solos cuando se les "+
+            "carga el RUC en Padrón.")));
+}
+
 function Ajustes(p){
   var s1 = useState("reglas"), sec = s1[0], setSec = s1[1];
-  var SECS = [["reglas","Reglas de emisión"],["contabilidad","Contabilidad"]];
+  var SECS = [["reglas","Reglas de emisión"],["altas","Emisores y receptores"],
+              ["contabilidad","Contabilidad"]];
   return h("div",null,
     h("div",{className:"row",style:{gap:8,marginBottom:18}},
       SECS.map(function(x){
         return h("button",{key:x[0],className:"chip"+(sec===x[0]?" on":""),
           onClick:function(){ setSec(x[0]); }}, x[1]);
       })),
-    sec === "reglas" ? h(Emitir,p) : h(QuienLleva,p));
+    sec === "reglas" ? h(Emitir,p)
+      : (sec === "altas" ? h(Altas,p) : h(QuienLleva,p)));
 }
 
 function QuienLleva(p){

@@ -412,8 +412,31 @@ setTimeout(async () => {
   /* --- ajustes: reglas y quién lleva la contabilidad --- */
   await irA("Ajustes");
   const TE = txt();
-  ok("ajustes tiene las dos secciones",
-    /Reglas de emisión/.test(TE) && /Contabilidad/.test(TE));
+  ok("ajustes tiene las tres secciones",
+    /Reglas de emisión/.test(TE) && /Emisores y receptores/.test(TE) &&
+    /Contabilidad/.test(TE));
+  {
+    const b = [...doc.querySelectorAll("button.chip")]
+      .find(x => x.textContent === "Emisores y receptores");
+    b.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await pausa(80);
+    const TA = txt();
+    ok("deja crear un receptor nuevo",
+      /Razón social/.test(TA) && /guardar receptor/.test(TA));
+    ok("valida el RUC del receptor", /11 dígitos/.test(TA));
+    const be = [...doc.querySelectorAll("button.chip")]
+      .find(x => x.textContent === "Emisor nuevo");
+    be.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await pausa(80);
+    const TB2 = txt();
+    ok("deja crear un emisor nuevo",
+      /guardar emisor/.test(TB2) && /Cuenta de detracción/.test(TB2));
+    ok("el emisor puede marcarse como RUC propio", /RUC propio/.test(TB2));
+    const vr = [...doc.querySelectorAll("button.chip")]
+      .find(x => x.textContent === "Reglas de emisión");
+    vr.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await pausa(60);
+  }
   ok("emitir ya no trae la calculadora",
     !/Cae al banco/.test(TE) && !/Neto \(sin IGV\)/.test(TE));
   ok("emitir separa mías de las de los asesores",
@@ -513,6 +536,23 @@ setTimeout(async () => {
   const checks = [...doc.querySelectorAll('input[type=checkbox]')];
   ok("hay 1 casilla, la de quien tiene RUC", checks.length === 1, "hay " + checks.length);
   ok("esa casilla está habilitada", checks.some(c => !c.disabled));
+  /* todo lo que hace falta para emitir, en la misma línea */
+  {
+    const det = [...doc.querySelectorAll("button.lk")]
+      .find(x => x.textContent === "detalle");
+    ok("cada comisión abre su detalle", !!det);
+    if (det) {
+      det.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+      await pausa(80);
+      const TL = txt();
+      ok("el detalle trae receptor, glosa e importes",
+        /A quién se le factura/.test(TL) && /Glosa/.test(TL) &&
+        /Valor de venta/.test(TL) && /IGV 18%/.test(TL));
+      ok("el detalle dice a qué cuenta cae", /Cuenta para el depósito/.test(TL));
+      det.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+      await pausa(60);
+    }
+  }
   await chip("Sin RUC");
   const T2b = txt();
   ok("sin RUC muestra a quien falta el dato", /BEA PRUEBA DOS/.test(T2b));
@@ -644,6 +684,9 @@ setTimeout(async () => {
     const abrir = [...doc.querySelectorAll("button.btn.sec.sm")]
       .find(x => x.textContent === "Abrir");
     ok("cada fila del padrón se puede abrir", !!abrir);
+    ok("el nombre también abre la ficha",
+      [...doc.querySelectorAll("button")].some(b =>
+        b.textContent.indexOf("ANA PRUEBA UNO") === 0 && b.className === ""));
     if (abrir) {
       abrir.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
       await pausa(80);
