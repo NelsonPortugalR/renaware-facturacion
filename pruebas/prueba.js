@@ -678,6 +678,24 @@ setTimeout(async () => {
     await pausa(60);
   }
 
+  /* las fechas no pueden depender del idioma del navegador */
+  {
+    const f = dom.window.isoADmy, v = dom.window.fechaValida;
+    ok("expone el formateo de fechas",
+      typeof f === "function" && typeof v === "function");
+    if (typeof f === "function") {
+      ok("muestra la fecha en DD/MM/AAAA", f("2026-11-06") === "06/11/2026",
+        "dio " + f("2026-11-06"));
+      ok("con fecha vacía no inventa nada", f("") === "" && f(null) === "");
+      ok("acepta una fecha real", v("2026-11-06") === true);
+      ok("rechaza el 31 de febrero", v("2026-02-31") === false);
+      ok("rechaza lo que no es una fecha", v("06/11/2026") === false);
+    }
+    const dates = [...doc.querySelectorAll('input[type=date]')];
+    ok("ya no quedan calendarios del navegador", dates.length === 0,
+      "quedan " + dates.length);
+  }
+
   /* --- el detalle del 0621: lo que se declara mes a mes --- */
   {
     const tabs = [...doc.querySelectorAll("button.chip")];
@@ -735,6 +753,26 @@ setTimeout(async () => {
         /DNI/.test(TP) && /Distrito/.test(TP) && /Patrocinador/.test(TP));
       ok("la ficha dice que la base es compartida",
         /misma base que usa el resto de la plataforma/.test(TP));
+      /* el CCI y el 1609, editables desde la ficha */
+      const tabs = [...doc.querySelectorAll("button.tab")];
+      const cuentas = tabs.find(x => x.textContent === "Cuentas");
+      if (cuentas) {
+        cuentas.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+        await pausa(80);
+        const TQ2 = txt();
+        ok("la ficha deja marcar el estado del CCI Único",
+          /Estado del CCI Único/.test(TQ2) && /registrado en SUNAT/.test(TQ2));
+        ok("y aclara que se lleva uno solo", /reemplaza a este/.test(TQ2));
+      }
+      const trib = tabs.find(x => x.textContent === "Tributario");
+      if (trib) {
+        trib.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+        await pausa(80);
+        const TT = txt();
+        ok("la ficha deja cargar el F.1609", /F\.1609/.test(TT) &&
+          /Ejercicio del 1609 vigente/.test(TT));
+        ok("y avisa que caduca cada enero", /en enero caduca/.test(TT));
+      }
     }
   }
 

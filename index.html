@@ -182,6 +182,54 @@ function Campo(p){
       style:p.tipo==="number"?{fontFamily:"var(--mono)"}:null}),
     p.nota ? h("div",{className:"hint",style:{marginTop:3}}, p.nota) : null);
 }
+/* El <input type="date"> se pinta en el idioma del navegador, no en el de la
+   página: en una máquina en inglés sale MM/DD y se presta a error justo donde
+   una fecha equivocada cambia un periodo tributario. Esto es texto, siempre
+   DD/MM/AAAA, y guarda en ISO. */
+function isoADmy(iso){
+  if(!iso || String(iso).length < 10) return "";
+  return String(iso).slice(8,10) + "/" + String(iso).slice(5,7) + "/" + String(iso).slice(0,4);
+}
+function fechaValida(iso){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
+  var d = new Date(iso + "T12:00:00");
+  return !isNaN(d.getTime()) && d.toISOString().slice(0,10) === iso;
+}
+function CampoFecha(p){
+  var s1 = useState(isoADmy(p.value)), txt = s1[0], setTxt = s1[1];
+  useEffect(function(){ setTxt(isoADmy(p.value)); },[p.value]);
+  var crudo = txt.replace(/\D/g,"");
+  var malo = crudo.length > 0 && crudo.length < 8;
+  var invalida = crudo.length === 8 &&
+    !fechaValida(crudo.slice(4,8)+"-"+crudo.slice(2,4)+"-"+crudo.slice(0,2));
+
+  function escribir(v){
+    var d = String(v).replace(/\D/g,"").slice(0,8);
+    var out = d.slice(0,2);
+    if(d.length > 2) out += "/" + d.slice(2,4);
+    if(d.length > 4) out += "/" + d.slice(4,8);
+    setTxt(out);
+    if(d.length === 0){ p.onChange(""); return; }
+    if(d.length === 8){
+      var iso = d.slice(4,8) + "-" + d.slice(2,4) + "-" + d.slice(0,2);
+      if(fechaValida(iso)) p.onChange(iso);
+    }
+  }
+  var campo = h("input",{className:"in mono", type:"text", inputMode:"numeric",
+    placeholder:"DD/MM/AAAA", value:txt, maxLength:10,
+    style:Object.assign({}, p.estilo||{},
+      (malo||invalida) ? {borderColor:"var(--alerta)"} : null),
+    onChange:function(e){ escribir(e.target.value); }});
+  if(p.suelto) return campo;
+  return h("label",{style:{display:"block"}},
+    h("span",{className:"lbl"}, p.label),
+    campo,
+    invalida ? h("div",{className:"hint",style:{marginTop:3,color:"var(--alerta)"}},
+      "esa fecha no existe")
+      : (malo ? h("div",{className:"hint",style:{marginTop:3,color:"var(--alerta)"}},
+          "faltan dígitos")
+         : (p.nota ? h("div",{className:"hint",style:{marginTop:3}}, p.nota) : null)));
+}
 function Modal(p){
   return h("div",{className:"ov", onClick:p.onClose},
     h("div",{className:"modal", onClick:function(e){ e.stopPropagation(); }}, p.children));
@@ -283,7 +331,7 @@ function App(props){
       db.from("eq_personas").select("id,nombre,codigo_asesor,ruc,cuenta_detraccion,cci,"+
         "banco,cuenta_bancaria,codigo_division,factura_desde,regimen,activo,celular,"+
         "correo,notas,dni,distrito,provincia,departamento,patrocinador_id,"+
-        "ingreso_fecha,nacimiento,origen,contabilidad")
+        "ingreso_fecha,nacimiento,origen,contabilidad,cci_estado")
         .order("nombre"),
       db.from("fact_facturas").select("*").order("fecha_emision"),
       db.from("fact_declaraciones").select("*"),
@@ -663,7 +711,7 @@ function App(props){
     var campos = ["ruc","cuenta_detraccion","cci","banco","cuenta_bancaria",
                   "codigo_division","factura_desde","regimen","activo","celular",
                   "correo","notas","dni","distrito","provincia","departamento",
-                  "contabilidad"];
+                  "contabilidad","cci_estado"];
     var patch = {}; campos.forEach(function(c){ patch[c] = p[c] === "" ? null : p[c]; });
     return db.from("eq_personas").update(patch).eq("id", p.id).select().then(function(r){
       if(r.error){ avisar("No se pudo guardar: " + r.error.message); return false; }
@@ -824,6 +872,23 @@ function App(props){
         return true;
       });
   }
+  function guardarSuspension(ruc, anio){
+    return db.from("fact_emisores")
+      .update({suspension_4ta_anio: anio}).eq("ruc", ruc).select()
+      .then(function(r){
+        if(r.error){ avisar("No se pudo guardar: " + r.error.message); return false; }
+        if(!r.data.length){
+          avisar("Esa persona todavía no está como emisor; se crea al cargarle el RUC.");
+          return false;
+        }
+        var m = {}; r.data.forEach(function(x){ m[x.id] = x; });
+        setEmisores(function(prev){ return prev.map(function(x){
+          return m[x.id] ? m[x.id] : x; }); });
+        avisar(anio ? "F.1609 del ejercicio " + anio + " registrado."
+                    : "Suspensión quitada: vuelve la retención de 4ta.");
+        return true;
+      });
+  }
   function guardarContabilidad(pid, valor){
     return moverContabilidad([pid], valor);
   }
@@ -923,6 +988,7 @@ function App(props){
         guardar:guardarDecl,guardarVarias:guardarVarias,avisar:avisar}) : null,
       vista==="padron" ? h(Padron,{personas:personas,facturas:facturas,
         abrirId:verPersona, visto:function(){ setVerPersona(null); },
+        emisores:emisores, guardarSuspension:guardarSuspension,
         guardar:guardarPersona}) : null,
       vista==="anual" ? h(Anual,{personas:personas,emitidas:emitidas,oblig:oblig,
         esMio:esMio,
@@ -1358,7 +1424,7 @@ function NuevaPendiente(p){
     h("div",{className:"dos",style:{gap:12,marginTop:12}},
       h(Campo,{label:"Neto (sin IGV)",value:neto,onChange:setNeto,ph:"0.00",
         nota:"el monto que te manda Javier"}),
-      h(Campo,{label:"Fecha estimada",tipo:"date",value:fecha,onChange:setFecha,
+      h(CampoFecha,{label:"Fecha estimada",value:fecha,onChange:setFecha,
         nota:"se corrige al marcarla como emitida"})),
 
     h("div",{style:{marginTop:12}},
@@ -1403,7 +1469,7 @@ function ModalFacturar(p){
         "La fecha decide en qué mes entra la declaración.")),
     h("div",{style:{padding:"18px 20px"}},
       h("div",{className:"dos",style:{gap:12}},
-        h(Campo,{label:"Fecha de emisión",tipo:"date",value:fecha,onChange:setFecha,
+        h(CampoFecha,{label:"Fecha de emisión",value:fecha,onChange:setFecha,
           nota:"la real, la que dice el comprobante"}),
         h(Campo,{label:"Serie",value:serie,onChange:setSerie,ph:"E001"})),
       una ? h("div",{className:"dos",style:{gap:12,marginTop:12}},
@@ -2135,6 +2201,12 @@ function Padron(p){
 
     abierta ? h(Ficha,{persona:abierta,facturas:p.facturas.filter(function(f){
         return f.persona_id === abierta.id; }),
+      emisor:(function(){
+        for(var i=0;i<(p.emisores||[]).length;i++)
+          if(p.emisores[i].ruc === abierta.ruc) return p.emisores[i];
+        return null;
+      })(),
+      guardarSuspension:p.guardarSuspension,
       patrocinador:(function(){
         if(!abierta.patrocinador_id) return null;
         for(var i=0;i<p.personas.length;i++)
@@ -2201,7 +2273,7 @@ function Ficha(p){
           h(Campo,{label:"Régimen",value:x.regimen,onChange:set("regimen"),ph:"RMT"}),
           h(Campo,{label:"Código de división",value:x.codigo_division,
             onChange:set("codigo_division"),ph:"wv08"}),
-          h(Campo,{label:"Declara desde",tipo:"date",value:x.factura_desde,
+          h(CampoFecha,{label:"Declara desde",value:x.factura_desde,
             onChange:set("factura_desde"),
             nota:"primer mes con obligación mensual"}),
           h("label",{style:{display:"block"}},
@@ -2218,6 +2290,27 @@ function Ficha(p){
           x.ruc ? ("Grupo "+grupoDe(x.ruc)+" del cronograma SUNAT: "+
             "declara según el último dígito del RUC.") :
             "Sin RUC no se le puede facturar ni declarar."),
+        h("div",{className:"sep",style:{marginTop:14,paddingTop:12}},
+          h(Caps,null,"Suspensión de retenciones · F.1609"),
+          h("div",{style:{maxWidth:260}},
+            h("label",{style:{display:"block"}},
+              h("span",{className:"lbl"},"Ejercicio del 1609 vigente"),
+              h("input",{className:"in mono",inputMode:"numeric",maxLength:4,
+                value: p.emisor && p.emisor.suspension_4ta_anio
+                  ? String(p.emisor.suspension_4ta_anio) : "",
+                placeholder:"vacío = le retienen",
+                onChange:function(e){
+                  var v = e.target.value.replace(/\D/g,"").slice(0,4);
+                  if(v === "" ){ p.guardarSuspension(x.ruc, null); return; }
+                  if(v.length === 4) p.guardarSuspension(x.ruc, Number(v));
+                }}))),
+          h("div",{className:"hint",style:{marginTop:6,lineHeight:1.7}},
+            "Sólo aplica a quien emite recibo por honorarios. Con el 1609 "+
+            "presentado no le retienen el 8% de cuarta categoría, pero vale "+
+            "por ejercicio: en enero caduca y la retención vuelve.",
+            !p.emisor ? h("div",{style:{color:"var(--ambar)",marginTop:4}},
+              "Todavía no figura como emisor: se crea al cargarle el RUC.") : null)),
+
         h("div",{className:"card hint",style:{padding:"9px 13px",marginTop:12}},
           "Si facturó este año, la declaración anual es obligatoria aunque lo "+
           "desactives o suspenda actividades.")) : null,
@@ -2229,6 +2322,15 @@ function Ficha(p){
           onChange:set("cuenta_bancaria")}),
         h(Campo,{label:"CCI",value:x.cci,onChange:set("cci"),
           nota:"se asocia al RUC desde el portal"}),
+        h("label",{style:{display:"block"}},
+          h("span",{className:"lbl"},"Estado del CCI Único"),
+          h("select",{className:"in",value:x.cci_estado || "",
+              onChange:function(e){ set("cci_estado")(e.target.value || null); }},
+            h("option",{value:""},"— sin definir —"),
+            h("option",{value:"valido"},"Válido · registrado en SUNAT"),
+            h("option",{value:"pendiente"},"Pendiente de confirmar")),
+          h("div",{className:"hint",style:{marginTop:3}},
+            "Si aparece otro CCI, reemplaza a este: se lleva uno solo.")),
         h(Campo,{label:"Cuenta de detracción (BN)",value:x.cuenta_detraccion,
           onChange:set("cuenta_detraccion"),
           nota:"obligatoria si factura más de S/700"})) : null,
@@ -2614,9 +2716,9 @@ function Agenda(p){
               esCuota ? h("div",{style:{minWidth:150,textAlign:"right"}},
                 marcando === f.k
                   ? h("div",{className:"row",style:{gap:6,justifyContent:"flex-end"}},
-                      h("input",{className:"in mono",type:"date",value:fpago,
-                        style:{width:138,fontSize:12,padding:"4px 6px"},
-                        onChange:function(e){ setFpago(e.target.value); }}),
+                      h(CampoFecha,{suelto:true,value:fpago,
+                        estilo:{width:138,fontSize:12,padding:"4px 6px"},
+                        onChange:setFpago}),
                       h("button",{className:"btn ok sm",
                         onClick:function(){ confirmar(f); }},"ok"),
                       h("button",{className:"lk",
@@ -3255,7 +3357,7 @@ function NuevaDeuda(p){
       h(Campo,{label:"Monto",tipo:"number",value:monto,onChange:setMonto,
         nota:"lo que quedó debiendo"})),
     h("div",{style:{marginTop:12,maxWidth:280}},
-      h(Campo,{label:"Vence",tipo:"date",value:vence,onChange:setVence,
+      h(CampoFecha,{label:"Vence",value:vence,onChange:setVence,
         nota:"si es IGV prorrogado, la fecha corrida"})),
     err ? h("div",{className:"mono",style:{fontSize:11,color:"var(--alerta)",
       marginTop:10}}, err) : null,
@@ -3345,8 +3447,8 @@ function RegistrarPago(p){
             onChange:function(e){ setEstado(e.target.value); }},
           h("option",{value:"pagado"},"Pagado (tengo la constancia)"),
           h("option",{value:"nps"},"NPS generado, todavía sin pagar"))),
-      h(Campo,{label: estado === "pagado" ? "Fecha de pago" : "Pagar hasta",
-        tipo:"date",value:fecha,onChange:setFecha})),
+      h(CampoFecha,{label: estado === "pagado" ? "Fecha de pago" : "Pagar hasta",
+        value:fecha,onChange:setFecha})),
 
     h("div",{className:"sep",style:{marginTop:14,paddingTop:12}},
       h(Caps,null,"Cómo identificarlo en SOL"),
@@ -3472,7 +3574,7 @@ function Fraccionar(p){
       h(Campo,{label:"Deuda acogida",tipo:"number",value:acogido,
         onChange:setAcogido,nota:"el monto del Anexo 1, sin los intereses del cronograma"})),
     h("div",{style:{marginTop:10,maxWidth:260}},
-      h(Campo,{label:"Fecha de la resolución",tipo:"date",value:fecha,
+      h(CampoFecha,{label:"Fecha de la resolución",value:fecha,
         onChange:setFecha})),
     h("div",{style:{marginTop:12}},
       h("span",{className:"lbl"},"Cronograma"),
@@ -3623,7 +3725,7 @@ function PagoAlquiler(p){
       "Alquiler de " + etiqMes(p.m.anio, p.m.mes) + " · " + money(p.m.monto) +
       " con el Form. 1683"),
     h("div",{className:"dos",style:{gap:12}},
-      h(Campo,{label:"Fecha de pago",tipo:"date",value:fecha,onChange:setFecha}),
+      h(CampoFecha,{label:"Fecha de pago",value:fecha,onChange:setFecha}),
       h("label",{style:{display:"block"}},
         h("span",{className:"lbl"},"Cómo se pagó"),
         h("select",{className:"in",value:medio,
@@ -3906,9 +4008,9 @@ function Deudas(p){
                         onClick:function(){ p.marcarCuota(c, null); }},"deshacer")
                     : (marcando === k
                         ? h("span",{className:"row",style:{gap:6,justifyContent:"flex-end"}},
-                            h("input",{className:"in mono",type:"date",value:fpago,
-                              style:{width:134,fontSize:12,padding:"4px 6px"},
-                              onChange:function(e){ setFpago(e.target.value); }}),
+                            h(CampoFecha,{suelto:true,value:fpago,
+                              estilo:{width:134,fontSize:12,padding:"4px 6px"},
+                              onChange:setFpago}),
                             h("button",{className:"btn ok sm",
                               onClick:function(){ confirmar(c); }},"ok"),
                             h("button",{className:"lk",
