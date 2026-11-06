@@ -271,6 +271,7 @@ function App(props){
   var sE = useState([]), obligs = sE[0], setObligs = sE[1];
   var sF = useState([]), cuotas = sF[0], setCuotas = sF[1];
   var sG = useState([]), pagos = sG[0], setPagos = sG[1];
+  var sI = useState([]), alqs = sI[0], setAlqs = sI[1];
 
   function avisar(t){ setAviso(t); setTimeout(function(){ setAviso(null); }, 4000); }
 
@@ -294,7 +295,8 @@ function App(props){
       db.from("fact_reglas_emision").select("*"),
       db.from("fact_obligaciones").select("*"),
       db.from("fact_obligacion_cuotas").select("*").order("vence"),
-      db.from("fact_pagos").select("*").order("fecha_pago")
+      db.from("fact_pagos").select("*").order("fecha_pago"),
+      db.from("fact_arrendamientos").select("*").order("desde")
     ]).then(function(r){
       for(var i=0;i<r.length;i++){
         if(r[i].error){ setErrCarga(r[i].error.message); setCargando(false); return; }
@@ -305,7 +307,7 @@ function App(props){
       setGastos(r[5].data||[]);
       setEmisores(r[6].data||[]); setReceptores(r[7].data||[]);
       setReglas(r[8].data||[]); setObligs(r[9].data||[]); setCuotas(r[10].data||[]);
-      setPagos(r[11].data||[]);
+      setPagos(r[11].data||[]); setAlqs(r[12].data||[]);
       setCargando(false);
     });
   },[]);
@@ -424,6 +426,29 @@ function App(props){
     return function(ruc){ return !!(ruc && s[ruc]); };
   },[emisores]);
 
+  /* Cada mes vigente del contrato debe su 5%. El pago es lo que se guarda;
+     el mes se calcula. */
+  var alquileres = useMemo(function(){
+    var hoy = mesDe(hoyISO());
+    return alqs.filter(function(c){ return c.activo; }).map(function(c){
+      var meses = [], a = +c.desde.slice(0,4), m = +c.desde.slice(5,7), guard = 0;
+      var finA = c.hasta ? +c.hasta.slice(0,4) : hoy.anio;
+      var finM = c.hasta ? +c.hasta.slice(5,7) : hoy.mes;
+      while((a < finA || (a === finA && m <= finM)) && guard++ < 180){
+        var pg = null;
+        for(var i=0;i<pagos.length;i++){
+          var x = pagos[i];
+          if(x.arrendamiento_id === c.id && x.anio === a && x.mes === m
+             && x.estado === "pagado"){ pg = x; break; }
+        }
+        meses.push({anio:a, mes:m, monto:r2(Number(c.alquiler)*Number(c.tasa)),
+          pago:pg, vence: vmap[a+"|"+m+"|"+grupoDe(c.ruc)] || null});
+        m++; if(m > 12){ m = 1; a++; }
+      }
+      return {c:c, meses:meses};
+    });
+  },[alqs, pagos, vmap]);
+
   var agenda = useMemo(function(){
     var em = {}; emisores.forEach(function(e){ em[e.id] = e; });
     var ob = {}; obligs.forEach(function(o){ ob[o.id] = o; });
@@ -448,6 +473,19 @@ function App(props){
         vence: c.vence, monto: Number(c.monto)||0
       });
     });
+    alquileres.forEach(function(a){
+      a.meses.forEach(function(x){
+        if(x.pago) return;
+        out.push({
+          k:"a|"+a.c.id+"|"+x.anio+"|"+x.mes, clase:"arrendamiento",
+          mio:true, grupo:"mio", alquiler:{c:a.c, m:x},
+          quien:a.c.inmueble, ruc:a.c.ruc,
+          que:"Alquiler de " + etiqMes(x.anio,x.mes) + " \u00b7 Form. 1683",
+          codigo:"3011", vence:x.vence, monto:x.monto
+        });
+      });
+    });
+
     var corte = new Date(new Date(hoyISO()+"T12:00:00").getTime() - 60*864e5)
       .toISOString().slice(0,10);
     obPend.forEach(function(o){
@@ -467,7 +505,7 @@ function App(props){
       return x < y ? -1 : (x > y ? 1 : 0);
     });
     return out;
-  },[emisores,obligs,cuotas,obPend,esMio,P]);
+  },[emisores,obligs,cuotas,obPend,esMio,P,alquileres]);
 
   /* Meses propios cuyo vencimiento ya pasó y de los que no hay nada cargado:
      ni declaración ni deuda. No es que no se deba nada, es que no se sabe. */
@@ -650,6 +688,13 @@ function App(props){
         return marcarCuota({obligacion_id:fila.obligacion_id,
           numero:fila.cuota_numero}, fila.fecha_pago).then(function(){ return true; });
       }
+      return true;
+    });
+  }
+  function borrarPago(id){
+    return db.from("fact_pagos").delete().eq("id", id).then(function(r){
+      if(r.error){ avisar("No se pudo deshacer: " + r.error.message); return false; }
+      setPagos(function(prev){ return prev.filter(function(x){ return x.id !== id; }); });
       return true;
     });
   }
@@ -844,7 +889,8 @@ function App(props){
       vista==="deudas" ? h(Deudas,{obligs:obligs,cuotas:cuotas,emisores:emisores,
         pagos:pagos,esMio:esMio,P:P,marcarCuota:marcarCuota,
         crear:crearObligacion,pagar:registrarPago,fraccionar:fraccionarDeuda,
-        rehacer:rehacerCronograma}) : null,
+        rehacer:rehacerCronograma,alquileres:alquileres,
+        borrarPago:borrarPago}) : null,
       vista==="ajustes" ? h(Ajustes,{emisores:emisores,receptores:receptores,
         reglas:reglas,cfg:cfg,personas:personas,esMio:esMio,
         guardarRegla:guardarRegla,actualizarRegla:actualizarRegla,
@@ -3442,6 +3488,132 @@ function Fraccionar(p){
       "debe pasa a ser este cronograma."));
 }
 
+/* El alquiler no es una deuda suelta: es un contrato que debe 5% cada mes
+   mientras esté vigente, pagado con el Form. 1683 (tributo 3011). Los meses
+   salen del contrato; lo que se guarda es el pago. */
+function Alquileres(p){
+  var s1 = useState(null), pagando = s1[0], setPagando = s1[1];
+
+  if(!p.alquileres.length) return null;
+
+  return h("div",{style:{marginTop:24}},
+    h(Caps,null,"Alquileres · primera categoría"),
+    p.alquileres.map(function(a){
+      var pend = a.meses.filter(function(m){ return !m.pago; });
+      var deuda = r2(pend.reduce(function(s,m){ return s+m.monto; },0));
+      var vencidos = pend.filter(function(m){
+        return m.vence && dias(m.vence) < 0; }).length;
+      return h("div",{key:a.c.id,className:"card",style:{marginBottom:12,
+          borderColor: vencidos ? "var(--alerta)" : "var(--rule)",
+          borderLeftWidth: vencidos ? 3 : 1}},
+        h("div",{style:{padding:"12px 14px",borderBottom:"1px solid var(--rule)",
+            display:"flex",justifyContent:"space-between",gap:10,flexWrap:"wrap"}},
+          h("div",null,
+            h("div",{style:{fontSize:14,fontWeight:600}}, a.c.inmueble),
+            h("div",{className:"hint",style:{marginTop:2}},
+              "RUC " + a.c.ruc + " · alquiler " + money(a.c.alquiler) +
+              " · impuesto " + money(r2(a.c.alquiler * a.c.tasa)) +
+              " al mes (" + Math.round(Number(a.c.tasa)*100) + "%) · tributo 3011")),
+          h("div",{style:{textAlign:"right"}},
+            h("div",{className:"mono",style:{fontSize:16,
+              color: deuda > 0 ? "var(--ink)" : "var(--verde)"}},
+              deuda > 0 ? money(deuda) : "al día"),
+            h("div",{className:"hint",style:{marginTop:2}},
+              (a.meses.length - pend.length) + " de " + a.meses.length + " pagados"))),
+
+        h("div",{style:{overflowX:"auto"}},
+          h("table",null,
+            h("thead",null,h("tr",null,
+              ["Mes del alquiler","Vence","Impuesto","Estado",""].map(function(t,i){
+                return h("th",{key:i,style:{textAlign: i===2?"right":(i===4?"right":"left"),
+                  padding:"8px 14px",borderBottom:"1px solid var(--rule)",
+                  font:"9px/1 var(--mono)",textTransform:"uppercase",
+                  letterSpacing:".12em",color:"var(--ink40)",
+                  whiteSpace:"nowrap"}}, t); }))),
+            h("tbody",null, a.meses.map(function(m){
+              var d = m.vence ? dias(m.vence) : null;
+              var estado = m.pago ? "pagado" : (d !== null && d < 0 ? "vencido" : "pendiente");
+              var color = m.pago ? "var(--verde)"
+                        : (d !== null && d < 0 ? "var(--alerta)" : "var(--ink40)");
+              var k = a.c.id + "|" + m.anio + "|" + m.mes;
+              return h("tr",{key:k,style:{opacity: m.pago ? .6 : 1}},
+                h("td",{style:{padding:"9px 14px",borderTop:"1px solid var(--rule)",
+                  fontSize:12}}, etiqMes(m.anio, m.mes)),
+                h("td",{className:"mono",style:{padding:"9px 14px",
+                  borderTop:"1px solid var(--rule)",fontSize:12,whiteSpace:"nowrap"}},
+                  m.vence ? fechaCorta(m.vence) : "día por confirmar",
+                  !m.pago && d !== null
+                    ? h("span",{style:{color:color}}, " · " + cuandoTxt(m.vence))
+                    : null),
+                h("td",{className:"mono",style:{padding:"9px 14px",textAlign:"right",
+                  borderTop:"1px solid var(--rule)",fontSize:13}}, money(m.monto)),
+                h("td",{style:{padding:"9px 14px",borderTop:"1px solid var(--rule)"}},
+                  h("span",{className:"mono",style:{fontSize:11,color:color}}, estado),
+                  m.pago && !m.pago.fecha_pago
+                    ? h("div",{className:"hint",style:{color:"var(--ambar)"}},
+                        "sin fecha ni constancia") : null,
+                  m.pago && m.pago.fecha_pago
+                    ? h("div",{className:"hint"}, fechaCorta(m.pago.fecha_pago)) : null),
+                h("td",{style:{padding:"9px 14px",textAlign:"right",
+                    borderTop:"1px solid var(--rule)",whiteSpace:"nowrap"}},
+                  m.pago
+                    ? h("button",{className:"lk",
+                        onClick:function(){ p.borrarPago(m.pago.id); }},"deshacer")
+                    : h("button",{className:"btn sec sm",
+                        onClick:function(){ setPagando(pagando===k ? null : k); }},
+                        "registrar pago")));
+            })))),
+
+        (function(){
+          var m = a.meses.filter(function(x){
+            return (a.c.id+"|"+x.anio+"|"+x.mes) === pagando; })[0];
+          if(!m) return null;
+          return h(PagoAlquiler,{c:a.c, m:m, pagar:p.pagar,
+            cerrar:function(){ setPagando(null); }});
+        })());
+    }),
+    h("div",{className:"hint",style:{marginTop:8,lineHeight:1.8}},
+      "El impuesto es el 5% del alquiler y se paga al mes siguiente, con el "+
+      "Formulario 1683 y el código de tributo 3011. El cronograma es el mismo "+
+      "de las declaraciones: por el último dígito del RUC."));
+}
+
+function PagoAlquiler(p){
+  var s1 = useState(hoyISO()), fecha = s1[0], setFecha = s1[1];
+  var s2 = useState("yape"), medio = s2[0], setMedio = s2[1];
+  var s3 = useState(""), oper = s3[0], setOper = s3[1];
+  var s4 = useState(""), constancia = s4[0], setConstancia = s4[1];
+  var s5 = useState(false), yendo = s5[0], setYendo = s5[1];
+  return h("div",{style:{padding:"12px 14px",background:"var(--paper)",
+      borderTop:"1px solid var(--rule)"}},
+    h("div",{className:"hint",style:{marginBottom:10}},
+      "Alquiler de " + etiqMes(p.m.anio, p.m.mes) + " · " + money(p.m.monto) +
+      " con el Form. 1683"),
+    h("div",{className:"dos",style:{gap:12}},
+      h(Campo,{label:"Fecha de pago",tipo:"date",value:fecha,onChange:setFecha}),
+      h("label",{style:{display:"block"}},
+        h("span",{className:"lbl"},"Cómo se pagó"),
+        h("select",{className:"in",value:medio,
+            onChange:function(e){ setMedio(e.target.value); }},
+          MEDIOS.map(function(x){
+            return h("option",{key:x[0],value:x[0]}, x[1]); })))),
+    h("div",{className:"dos",style:{gap:12,marginTop:10}},
+      h(Campo,{label:"N° de operación",value:oper,onChange:setOper}),
+      h(Campo,{label:"Constancia",value:constancia,onChange:setConstancia,
+        ph:"enlace o ruta"})),
+    h("div",{className:"row",style:{marginTop:12,gap:10}},
+      h("button",{className:"btn ok sm",disabled:yendo,onClick:function(){
+        setYendo(true);
+        p.pagar({arrendamiento_id:p.c.id, ruc:p.c.ruc,
+          anio:p.m.anio, mes:p.m.mes, tributo:"3011",
+          monto:p.m.monto, monto_cuota:p.m.monto, estado:"pagado",
+          fecha_pago:fecha, medio:medio, formulario:"1683",
+          numero_operacion:oper||null, constancia_url:constancia||null
+        }).then(function(){ setYendo(false); p.cerrar(); });
+      }}, yendo ? "guardando…" : "registrar"),
+      h("button",{className:"lk",onClick:p.cerrar},"cancelar")));
+}
+
 function Deudas(p){
   var s1 = useState(null), marcando = s1[0], setMarcando = s1[1];
   var s2 = useState(hoyISO()), fpago = s2[0], setFpago = s2[1];
@@ -3507,11 +3679,20 @@ function Deudas(p){
   if(!todos.length) return h(Vacio,{nota:"Los fraccionamientos y el IGV prorrogado se cargan en fact_obligaciones."},
     "No hay deudas cargadas.");
 
-  var saldoTot = r2(grupos.reduce(function(s,g){ return s + g.saldo; },0));
+  var alqPend = (p.alquileres||[]).reduce(function(acc,a){
+    a.meses.forEach(function(m){ if(!m.pago) acc.push(m); });
+    return acc;
+  },[]);
+  var saldoAlq = r2(alqPend.reduce(function(s,m){ return s+m.monto; },0));
+  var vencAlq = r2(alqPend.filter(function(m){
+    return m.vence && dias(m.vence) < 0; })
+    .reduce(function(s,m){ return s+m.monto; },0));
+
+  var saldoTot = r2(grupos.reduce(function(s,g){ return s + g.saldo; },0) + saldoAlq);
   var vencTot = r2(grupos.reduce(function(s,g){
     return s + g.cs.filter(function(c){ return !c.pagada_en && dias(c.vence) < 0; })
       .reduce(function(a,c){ return a + Number(c.monto); },0);
-  },0));
+  },0) + vencAlq);
 
   function confirmar(c){
     p.marcarCuota(c, fpago).then(function(){ setMarcando(null); });
@@ -3548,7 +3729,8 @@ function Deudas(p){
     h("div",{className:"grid",style:{gridTemplateColumns:
         "repeat(auto-fit,minmax(170px,1fr))",marginBottom:22}},
       h(Kpi,{l:"Saldo total",v:miles(saldoTot),
-        sub:plural(grupos.length,"deuda","deudas")+" en curso"}),
+        sub:plural(grupos.length,"deuda","deudas")+" en curso"+
+          (alqPend.length ? " + " + plural(alqPend.length,"mes de alquiler","meses de alquiler") : "")}),
       h(Kpi,{l:"Vencido sin pagar",v:miles(vencTot),
         c: vencTot>0 ? "var(--alerta)" : "var(--verde)",
         sub: vencTot>0 ? "paga esto primero" : "nada atrasado"}),
@@ -3703,6 +3885,10 @@ function Deudas(p){
                             "pagada"))));
             })))));
     }),
+
+    amb !== "equipo" && amb !== "contador" && amb !== "externa"
+      ? h(Alquileres,{alquileres:p.alquileres||[], pagar:p.pagar,
+          borrarPago:p.borrarPago}) : null,
 
     verRes && res.length ? h("div",{style:{marginTop:8}},
       h(Caps,null,"Resueltas"),

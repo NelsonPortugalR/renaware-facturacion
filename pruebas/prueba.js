@@ -123,7 +123,18 @@ const obligaciones = [
 const pagos = [
   { id: "g1", obligacion_id: "o2", cuota_numero: null, ruc: "20600022653",
     anio: 2026, mes: 6, tributo: "1011", monto: 383, estado: "pagado",
-    fecha_pago: AYER, medio: "detraccion", referencia: null }
+    fecha_pago: AYER, medio: "detraccion", referencia: null },
+  // alquiler: un mes pagado y otro no
+  { id: "g2", arrendamiento_id: "al1", ruc: "10449906662",
+    anio: ANIO, mes: 6, tributo: "3011", monto: 147.5, estado: "pagado",
+    fecha_pago: AYER, medio: "yape", formulario: "1683" }
+];
+/* el alquiler debe 5% cada mes mientras el contrato esté vigente */
+const arrendamientos = [
+  { id: "al1", emisor_id: EMI_NAT, ruc: "10449906662",
+    inmueble: "Departamento en La Molina, Lima", inquilino: null,
+    alquiler: 2950, tasa: 0.05,
+    desde: ANIO + "-06-01", hasta: ANIO + "-07-31", activo: true }
 ];
 const cuotas = [
   { obligacion_id: "o1", numero: 1, vence: AYER,   monto: 302,  pagada_en: null },
@@ -143,6 +154,7 @@ const TABLAS = {
   fact_obligaciones: obligaciones,
   fact_obligacion_cuotas: cuotas,
   fact_pagos: pagos,
+  fact_arrendamientos: arrendamientos,
   fact_config: { id: "vigente", igv: 0.18, detraccion: 0.10,
     detraccion_umbral: 700, renta: 0.01, uit: 5500 }
 };
@@ -235,8 +247,11 @@ setTimeout(async () => {
   ok("cita el número de RI", /RI 0230174741237/.test(T));
   ok("muestra el IGV prorrogado", /IGV junio 2026/.test(T));
   ok("pone el código de tributo del fraccionamiento", /tributo 8021/.test(T));
-  /* vencido = 302 + 1931 = 2,233 */
-  ok("suma lo vencido", T.indexOf("S/ 2,233") >= 0);
+  /* vencido = 302 + 1931 + 147.50 del alquiler de julio = 2,380.50 */
+  ok("suma lo vencido", T.indexOf("S/ 2,381") >= 0);
+  ok("el alquiler sin pagar entra en la agenda",
+    /Alquiler de julio/.test(T) && /Form. 1683/.test(T));
+  ok("el alquiler lleva su código de tributo", /tributo 3011/.test(T));
   ok("avisa del riesgo de perder el fraccionamiento",
     /se pierde el fraccionamiento/.test(T));
   ok("ofrece marcar la cuota como pagada", /marcar pagada/.test(T));
@@ -337,8 +352,12 @@ setTimeout(async () => {
   await irA("Deuda");
   const TD = txt();
   ok("deuda arranca en lo mío", /Mías/.test(TD) && /Llevan por fuera/.test(TD));
-  ok("deudas: saldo total 2,530", TD.indexOf("S/ 2,530") >= 0);
-  ok("deudas: vencido sin pagar 2,233", TD.indexOf("S/ 2,233") >= 0);
+  /* el alquiler sin pagar también es deuda: 2,530 + 147.50 = 2,678 */
+  ok("deudas: el saldo total incluye el alquiler", TD.indexOf("S/ 2,678") >= 0);
+  ok("deudas: el vencido incluye el alquiler vencido",
+    TD.indexOf("S/ 2,381") >= 0);
+  ok("deudas: dice que además hay meses de alquiler",
+    /mes de alquiler|meses de alquiler/.test(TD));
   ok("deudas: lista las dos obligaciones",
     /Fraccionamiento/.test(TD) && /IGV junio 2026/.test(TD));
   ok("deudas: muestra el cronograma completo", /1 \/ 9/.test(TD) && /2 \/ 9/.test(TD));
@@ -362,6 +381,17 @@ setTimeout(async () => {
   ok("deuda: deja fraccionar el saldo", /fraccionar el saldo/.test(TD));
   ok("deuda: deja rehacer el cronograma si SUNAT lo recalcula",
     /SUNAT lo recalculó/.test(TD));
+
+  /* el alquiler: 5% al mes, Form. 1683, tributo 3011 */
+  ok("deuda muestra los alquileres", /Alquileres/.test(TD) &&
+    /La Molina/.test(TD));
+  ok("calcula el 5% del alquiler", /S\/ 147.50/.test(TD));
+  ok("dice con qué formulario y tributo se paga",
+    /1683/.test(TD) && /3011/.test(TD));
+  ok("marca el mes pagado y el que falta",
+    /pagado/.test(TD) && /pendiente|vencido/.test(TD));
+  ok("avisa cuando el pago no tiene fecha ni constancia",
+    /sin fecha ni constancia/.test(TD) || /\d{2}\/\d{2}\/\d{4}/.test(TD));
   {
     const b = [...doc.querySelectorAll("button.lk")]
       .find(x => x.textContent === "registrar un pago");
