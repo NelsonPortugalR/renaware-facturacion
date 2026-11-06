@@ -94,7 +94,9 @@ const emisores = [
   { id: EMI_NAT, ruc: "10449906662", nombre: "PORTUGAL ROMAN NELSON",
     tipo: "persona", relacion: "propio", persona_id: null, regimen: "4ta",
     serie_default: "E001", ultimo_correlativo: "RxH E001-481", activo: true,
-    banco: null, cuenta_bancaria: null, cci: null, cuenta_detraccion: null }
+    banco: null, cuenta_bancaria: null, cci: null, cuenta_detraccion: null,
+    /* el 1609 vale por ejercicio: este quedó viejo */
+    suspension_4ta_anio: ANIO - 1 }
 ];
 const receptores = [
   { id: REC_RW, ruc: "20100131863", razon_social: "RENA WARE DEL PERU S.A.", activo: true },
@@ -283,6 +285,14 @@ setTimeout(async () => {
   ok("avisa de los RUC propios sin comprobantes",
     /sin ningún comprobante cargado/.test(T));
   ok("nombra el RUC mudo", /10449906662/.test(T));
+
+  /* el F.1609 caduca con el ejercicio y la retención vuelve sola */
+  ok("avisa que la suspensión de retenciones quedó vieja",
+    /Suspensión de retenciones/.test(T));
+  ok("dice desde cuándo corresponde retener otra vez",
+    /corresponde retenerle el 8% otra vez/.test(T));
+  ok("y de qué ejercicio era el que está cargado",
+    new RegExp("ejercicio " + (ANIO - 1)).test(T));
   ok("en lo propio quedan las tres deudas", /Cuota 1 de 9/.test(T) &&
     /Cuota 2 de 9/.test(T) && /IGV junio 2026/.test(T));
 

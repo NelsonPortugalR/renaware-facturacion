@@ -523,6 +523,18 @@ function App(props){
     });
   },[oblig, esMio, agenda]);
 
+  /* El 1609 vale por ejercicio. Si el que está cargado no es el de este año,
+     la retención de 4ta volvió y nadie lo notó. */
+  var suspensiones = useMemo(function(){
+    var anio = new Date().getFullYear();
+    return emisores.filter(function(e){
+      return e.activo && e.suspension_4ta_anio && e.suspension_4ta_anio !== anio;
+    }).map(function(e){
+      return {nombre:e.nombre, ruc:e.ruc, anio:e.suspension_4ta_anio,
+              vencida: e.suspension_4ta_anio < anio};
+    });
+  },[emisores]);
+
   /* Y los RUC propios que no tienen ni un comprobante cargado: de esos no se
      puede saber siquiera qué meses tocaba declarar. */
   var rucsMudos = useMemo(function(){
@@ -885,7 +897,8 @@ function App(props){
 
     h("div",{className:"wrap",style:{padding:"18px 16px 60px"}},
       vista==="agenda" ? h(Agenda,{agenda:agenda,riesgo:riesgo,huecos:huecos,
-        rucsMudos:rucsMudos,marcarCuota:marcarCuota,ir:setVista}) : null,
+        rucsMudos:rucsMudos,suspensiones:suspensiones,
+        marcarCuota:marcarCuota,ir:setVista}) : null,
       vista==="deudas" ? h(Deudas,{obligs:obligs,cuotas:cuotas,emisores:emisores,
         pagos:pagos,esMio:esMio,P:P,marcarCuota:marcarCuota,
         crear:crearObligacion,pagar:registrarPago,fraccionar:fraccionarDeuda,
@@ -2518,6 +2531,23 @@ function Agenda(p){
       h("div",{className:"hint",style:{marginTop:6}},
         "Cuando aparezca una cuota o una declaración por vencer, sale en esta lista.")) : null,
 
+    (ambito === "mio" || ambito === "todas") && (p.suspensiones||[]).length
+      ? h("div",{className:"card",style:{padding:"12px 14px",marginBottom:20,
+          borderColor:"var(--ambar)",borderLeftWidth:3}},
+          h("div",{className:"caps",style:{fontSize:9,color:"var(--ambar)"}},
+            "Suspensión de retenciones"),
+          p.suspensiones.map(function(x){
+            return h("div",{key:x.ruc,style:{marginTop:6}},
+              h("div",{style:{fontSize:13}}, x.nombre),
+              h("div",{className:"hint",style:{marginTop:2,lineHeight:1.7}},
+                x.vencida
+                  ? ("El F.1609 cargado es del ejercicio " + x.anio +
+                     ". Desde enero corresponde retenerle el 8% otra vez, "+
+                     "salvo que haya presentado uno nuevo.")
+                  : ("Tiene cargado un F.1609 del ejercicio " + x.anio + ".")));
+          }))
+      : null,
+
     (ambito === "mio" || ambito === "todas") && (p.huecos.length || p.rucsMudos.length)
       ? h("div",{className:"card",style:{padding:"12px 14px",marginBottom:20,
           borderColor:"var(--ambar)",borderLeftWidth:3}},
@@ -3029,7 +3059,10 @@ function Emitir(p){
                 : Math.round(Number(g.detraccion_pct)*100) + "%" +
                   (g.detraccion_umbral ? " > " + Math.round(g.detraccion_umbral) : " siempre")),
             h("td",{className:"mono",style:td({textAlign:"right",fontSize:11})},
-              g.retencion_pct == null ? "—" : Math.round(Number(g.retencion_pct)*100) + "%"),
+              g.retencion_pct == null ? "—" : Math.round(Number(g.retencion_pct)*100) + "%",
+              g.tipo_comprobante === "rxh" && g.retencion_pct == null && e.suspension_4ta_anio
+                ? h("div",{className:"hint"},
+                    "1609 · ejercicio " + e.suspension_4ta_anio) : null),
             h("td",{style:td({textAlign:"right",fontSize:11,color:"var(--ink40)"})},
               g.glosa_plantilla || "—"),
             h("td",{style:td({textAlign:"right"})},
