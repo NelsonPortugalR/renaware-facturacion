@@ -593,7 +593,11 @@ function App(props){
     });
   },[emisores, oblig]);
 
-  /* Art. 36: con dos cuotas consecutivas impagas se pierde el fraccionamiento. */
+  /* Art. 36: con dos cuotas consecutivas impagas se pierde el fraccionamiento,
+     y la perdida vuelve exigible todo el saldo de golpe. Avisar cuando ya hay
+     una vencida es avisar a mitad de camino: la primera que se pasa es la que
+     arranca el reloj. Por eso entra tambien la que todavia no vence, en ambar
+     y sin contar como peligro, para que el aviso siga queriendo decir algo. */
   var riesgo = useMemo(function(){
     var em = {}; emisores.forEach(function(e){ em[e.id] = e; });
     var porOb = {};
@@ -603,20 +607,29 @@ function App(props){
     var out = [];
     obligs.forEach(function(o){
       if(o.tipo !== "fraccionamiento" || (o.estado && o.estado !== "abierta")) return;
-      var atras = (porOb[o.id]||[]).filter(function(c){
-        return !c.pagada_en && dias(c.vence) < 0;
-      }).length;
-      if(atras > 0){
-        var sigue = (porOb[o.id]||[]).filter(function(c){
-          return !c.pagada_en && dias(c.vence) >= 0;
-        }).sort(function(a,b){ return a.vence < b.vence ? -1 : 1; })[0];
-        out.push({ref:o.referencia,
-          emisor:(em[o.emisor_id]||{}).nombre || "\u2014", atrasadas:atras,
-          proxima: sigue ? dias(sigue.vence) : null,
-          proximaFecha: sigue ? sigue.vence : null});
-      }
+      var pend = (porOb[o.id]||[]).filter(function(c){ return !c.pagada_en; });
+      var atras = pend.filter(function(c){ return dias(c.vence) < 0; })
+        .sort(function(a,b){ return a.vence < b.vence ? -1 : 1; });
+      var sigue = pend.filter(function(c){ return dias(c.vence) >= 0; })
+        .sort(function(a,b){ return a.vence < b.vence ? -1 : 1; })[0];
+      var d = sigue ? dias(sigue.vence) : null;
+      /* 12 dias: alcanza para generar el NPS y pagar sin que el aviso este
+         puesto todo el mes y deje de leerse. */
+      if(!atras.length && !(d != null && d <= 12)) return;
+      out.push({ref:o.referencia,
+        emisor:(em[o.emisor_id]||{}).nombre || "\u2014",
+        atrasadas: atras.length,
+        montoAtrasado: r2(atras.reduce(function(s,c){ return s+Number(c.monto); },0)),
+        cuotaAtrasada: atras.length ? atras[0].numero : null,
+        fechaAtrasada: atras.length ? atras[0].vence : null,
+        proxima: d, proximaFecha: sigue ? sigue.vence : null,
+        proximaNumero: sigue ? sigue.numero : null,
+        montoProxima: sigue ? Number(sigue.monto) : null,
+        nivel: atras.length >= 2 ? "perdido"
+             : (atras.length === 1 ? "borde" : "proxima")});
     });
-    return out;
+    var orden = {perdido:0, borde:1, proxima:2};
+    return out.sort(function(a,b){ return orden[a.nivel] - orden[b.nivel]; });
   },[emisores,obligs,cuotas]);
 
   /* ---- escrituras ---- */
@@ -1096,7 +1109,19 @@ function DetalleLinea(p){
         h("div",{style:{marginTop:8}},
           h("span",{className:"lbl"},"Glosa"),
           h("div",{className:"card",style:{padding:"7px 10px",fontSize:12,
-            lineHeight:1.5}}, f.descripcion || "—"))),
+            lineHeight:1.5}}, f.descripcion || "—")),
+        h("div",{style:{marginTop:8}},
+          h("span",{className:"lbl"},"Se envía a"),
+          h("div",{className:"mono",style:{fontSize:12}},
+            correoDe(g, r) || "sin correo cargado"),
+          g && g.correo_facturacion
+            ? h("div",{className:"hint",style:{marginTop:1}},
+                "propio de este emisor, no el general del receptor")
+            : (correoDe(g, r)
+                ? h("div",{className:"hint",style:{marginTop:1}},
+                    "el general del receptor")
+                : h("div",{className:"hint",style:{marginTop:1}},
+                    "se carga en Ajustes, en la regla o en el receptor")))),
       h("div",null,
         h(Caps,null,"Importes"),
         Fila("Valor de venta", money(f.neto)),
@@ -1309,8 +1334,13 @@ function PorFacturar(p){
                 h("div",{style:{textAlign:"right"}},
                   h("div",{className:"mono",style:{fontSize:13}}, money(f.total)),
                   h("div",{className:"hint"},
-                    "neto "+money(f.neto)+
-                    (Number(f.detraccion)>0 ? " · detr "+money(f.detraccion) : ""))),
+                    /* "neto" se lee como lo que llega, y es la base del IGV.
+                       Con detraccion no son lo mismo y la diferencia es plata. */
+                    "base "+money(f.neto)+
+                    (Number(f.detraccion)>0
+                      ? " · detr "+money(f.detraccion)+
+                        " · al banco "+money(r2(Number(f.total)-Number(f.detraccion)))
+                      : ""))),
                 h("button",{className:"lk",style:{minWidth:54,textAlign:"right"},
                   onClick:function(){ setAbierta(abierta===f.id ? null : f.id); }},
                   abierta===f.id ? "cerrar" : "detalle")),
@@ -2604,27 +2634,62 @@ function Agenda(p){
       h(Kpi,{l:"Próximos 31 días",v:miles(tot30),
         sub: plural(filas.filter(function(f){ var d=dias(f.vence); return d!=null&&d>=0&&d<=31; }).length,
              "vencimiento","vencimientos")}),
-      h(Kpi,{l:"Riesgo",v: p.riesgo.length ? String(p.riesgo.length) : "0",
-        c: p.riesgo.length ? "var(--alerta)" : "var(--verde)",
-        sub: p.riesgo.length ? "fraccionamiento en peligro" : "fraccionamientos al día"})),
+      (function(){
+        /* Un fraccionamiento con la cuota del mes por vencer no esta en
+           peligro: esta por pagarse. Mezclarlos apaga el indicador. */
+        var grave = p.riesgo.filter(function(r){ return r.nivel !== "proxima"; });
+        var porPagar = p.riesgo.length - grave.length;
+        return h(Kpi,{l:"Riesgo",v: grave.length ? String(grave.length) : "0",
+          c: grave.length ? "var(--alerta)" : "var(--verde)",
+          sub: grave.length
+            ? plural(grave.length,"fraccionamiento en peligro","fraccionamientos en peligro")
+            : (porPagar
+                ? plural(porPagar,"cuota por vencer","cuotas por vencer")
+                : "fraccionamientos al día")});
+      })()),
 
-    p.riesgo.length ? h("div",{className:"card",style:{padding:"12px 14px",
-        marginBottom:20,borderColor:"var(--alerta)",borderLeftWidth:3}},
-      h("div",{className:"caps",style:{fontSize:9,color:"var(--alerta)"}},"Atención"),
-      p.riesgo.map(function(r){
-        return h("div",{key:r.ref,style:{fontSize:13,marginTop:6}},
-          r.emisor + " · " + r.ref,
-          h("div",{className:"hint",style:{marginTop:2}},
-            r.atrasadas === 1
-              ? ("1 cuota vencida sin pagar" +
-                 (r.proxima != null
-                   ? " y la siguiente vence " + (r.proxima === 0 ? "hoy"
-                       : "en " + plural(r.proxima,"día","días")) +
-                     " (" + fechaCorta(r.proximaFecha) + "). " +
-                     "Si esa también se pasa, son dos consecutivas y se pierde el fraccionamiento (Art. 36)."
-                   : ". Con dos consecutivas se pierde el fraccionamiento (Art. 36)."))
-              : r.atrasadas + " cuotas vencidas. El fraccionamiento ya puede darse por perdido; conviene verificar en SUNAT hoy."));
-      })) : null,
+    p.riesgo.length ? (function(){
+      var hayGrave = p.riesgo.some(function(r){ return r.nivel !== "proxima"; });
+      return h("div",{className:"card",style:{padding:"12px 14px",
+          marginBottom:20,borderLeftWidth:3,
+          borderColor: hayGrave ? "var(--alerta)" : "var(--ambar)"}},
+        h("div",{className:"caps",style:{fontSize:9,
+          color: hayGrave ? "var(--alerta)" : "var(--ambar)"}},
+          hayGrave ? "Fraccionamiento en riesgo" : "Cuota por vencer"),
+        p.riesgo.map(function(r){
+          var col = r.nivel === "proxima" ? "var(--ambar)" : "var(--alerta)";
+          var cuando = function(d){
+            return d === 0 ? "hoy" : "en " + plural(d,"día","días");
+          };
+          return h("div",{key:r.ref,style:{fontSize:13,marginTop:8}},
+            h("span",{style:{color:col}}, "\u25cf "), r.emisor + " \u00b7 " + r.ref,
+            r.nivel === "perdido"
+              ? h("div",{className:"hint",style:{marginTop:2}},
+                  plural(r.atrasadas,"cuota vencida","cuotas vencidas") + " por " +
+                  money(r.montoAtrasado) + ". Son dos consecutivas o más: el " +
+                  "fraccionamiento ya puede darse por perdido y todo el saldo " +
+                  "vuelve a ser exigible. Conviene verificarlo en SUNAT hoy mismo.")
+              : r.nivel === "borde"
+              ? h("div",{className:"hint",style:{marginTop:2}},
+                  "La cuota " + r.cuotaAtrasada + " venció el " +
+                  fechaCorta(r.fechaAtrasada) + " y sigue impaga: " +
+                  money(r.montoAtrasado) + ". ",
+                  r.proximaFecha
+                    ? h("span",{style:{color:"var(--alerta)"}},
+                        "Si la cuota " + r.proximaNumero + " (" +
+                        fechaCorta(r.proximaFecha) + ", " + money(r.montoProxima) +
+                        ") también se pasa, son dos consecutivas y se pierde el " +
+                        "fraccionamiento. Quedan " + plural(r.proxima,"día","días") +
+                        " para pagar la vencida.")
+                    : h("span",{style:{color:"var(--alerta)"}},
+                        "Con dos consecutivas se pierde el fraccionamiento (Art. 36)."))
+              : h("div",{className:"hint",style:{marginTop:2}},
+                  "La cuota " + r.proximaNumero + " vence " + cuando(r.proxima) +
+                  " (" + fechaCorta(r.proximaFecha) + "): " + money(r.montoProxima) +
+                  ". Nada vencido todavía. Si esta se pasa empieza a contar el " +
+                  "Art. 36, y con la siguiente ya se pierde el fraccionamiento."));
+        }));
+    })() : null,
 
     !filas.length ? h("div",{className:"card",style:{padding:"34px 16px",
         textAlign:"center",color:"var(--ink70)"}},
@@ -2750,6 +2815,13 @@ function Agenda(p){
    factura a quién, pongo el neto y sale exactamente lo que va en el
    comprobante y lo que cae al banco. */
 
+/* El correo de facturacion no es del receptor sino del par emisor-receptor:
+   lo de Portugal lo recibe una persona distinta que lo de las asesoras, y
+   mandarlo al general es que no le llegue a quien lo tiene que pagar. */
+function correoDe(regla, receptor){
+  return (regla && regla.correo_facturacion) ||
+         (receptor && receptor.correo_facturacion) || null;
+}
 function reglaDe(reglas, eid, rid){
   for(var i=0;i<reglas.length;i++){
     if(reglas[i].emisor_id===eid && reglas[i].receptor_id===rid) return reglas[i];
@@ -3050,7 +3122,7 @@ function Emitir(p){
   var s1 = useState(false), abierta = s1[0], setAbierta = s1[1];
   var VACIA = {emisor_id:"", receptor_id:"", tipo_comprobante:"factura",
     lleva_igv:true, detraccion_pct:"", detraccion_umbral:"", codigo_bien:"037",
-    retencion_pct:"", glosa_plantilla:"", notas:""};
+    retencion_pct:"", glosa_plantilla:"", correo_facturacion:"", notas:""};
   var s2 = useState(VACIA), fm = s2[0], setFm = s2[1];
   var s3 = useState(""), err = s3[0], setErr = s3[1];
   var s4 = useState(false), yendo = s4[0], setYendo = s4[1];
@@ -3065,7 +3137,9 @@ function Emitir(p){
       detraccion_umbral: g.detraccion_umbral == null ? "" : String(g.detraccion_umbral),
       codigo_bien: g.codigo_bien || "037",
       retencion_pct: g.retencion_pct == null ? "" : String(r2(Number(g.retencion_pct)*100)),
-      glosa_plantilla: g.glosa_plantilla || "", notas: g.notas || ""});
+      glosa_plantilla: g.glosa_plantilla || "",
+      correo_facturacion: g.correo_facturacion || "",
+      notas: g.notas || ""});
     setErr(""); setAbierta(true);
   }
 
@@ -3111,6 +3185,7 @@ function Emitir(p){
       codigo_bien: fm.detraccion_pct === "" ? null : (fm.codigo_bien || null),
       retencion_pct: fm.retencion_pct === "" ? null : Number(fm.retencion_pct)/100,
       glosa_plantilla: fm.glosa_plantilla || null,
+      correo_facturacion: fm.correo_facturacion || null,
       notas: fm.notas || null
     };
     setYendo(true);
@@ -3228,6 +3303,13 @@ function Emitir(p){
               h("textarea",{className:"in",rows:2,value:fm.glosa_plantilla,
                 placeholder:"la que suele ir en este comprobante",
                 onChange:function(e){ set("glosa_plantilla")(e.target.value); }})),
+
+            h("div",{style:{marginTop:12}},
+              h(Campo,{label:"Correo de facturación",value:fm.correo_facturacion,
+                ph:(RE[fm.receptor_id]||{}).correo_facturacion || "correo@empresa.com",
+                onChange:set("correo_facturacion"),
+                nota:"Sólo si para este emisor va a otra persona. Vacío = el "+
+                     "general del receptor."})),
 
             err ? h("div",{className:"mono",style:{fontSize:11,color:"var(--alerta)",
               marginTop:10}}, err) : null,

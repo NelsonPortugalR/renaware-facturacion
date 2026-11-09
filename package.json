@@ -1,0 +1,14 @@
+{
+  "name": "renaware-facturacion",
+  "private": true,
+  "description": "Control de facturacion y obligaciones SUNAT del Equipo Arequipa",
+  "scripts": {
+    "test": "node pruebas/prueba.js",
+    "ver": "node pruebas/ver.js"
+  },
+  "devDependencies": {
+    "jsdom": "^31.0.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  }
+}

@@ -4,11 +4,14 @@
    proyección anual), no la red. */
 const fs = require("fs");
 const path = require("path");
-const { JSDOM } = require("/home/claude/node_modules/jsdom");
+/* Resuelto por Node, no con una ruta absoluta: el contenedor se recrea y la
+   ruta de ayer no existe mañana. Con `npm install` en el repo alcanza. */
+const { JSDOM } = require("jsdom");
 
-const NM = "/home/claude/node_modules";
-const react = fs.readFileSync(NM + "/react/umd/react.production.min.js", "utf8");
-const reactDom = fs.readFileSync(NM + "/react-dom/umd/react-dom.production.min.js", "utf8");
+const umd = (paq, arch) => path.join(
+  path.dirname(require.resolve(paq + "/package.json")), "umd", arch);
+const react = fs.readFileSync(umd("react", "react.production.min.js"), "utf8");
+const reactDom = fs.readFileSync(umd("react-dom", "react-dom.production.min.js"), "utf8");
 
 /* ---------------- fixtures ---------------- */
 const HOY = new Date().toISOString().slice(0, 10);
@@ -60,6 +63,9 @@ const facturas = [
   fac("f2", "p1", "ANA PRUEBA UNO", "10296091861", 500, "emitida", ANIO + "-07-10", 28),
   // p1: pendiente
   fac("f3", "p1", "ANA PRUEBA UNO", "10296091861", 200, "borrador", ANIO + "-09-04", 36),
+  /* p1: otro pendiente, este sí pasa de 700 con IGV -> lleva detracción.
+     Hace falta para que la línea tenga que decir qué cae al banco. */
+  fac("f8", "p1", "ANA PRUEBA UNO", "10296091861", 800, "borrador", ANIO + "-09-18", 38),
   // p2 sin RUC: pendiente trabado
   fac("f4", "p2", "BEA PRUEBA DOS", null, 300, "borrador", ANIO + "-09-04", 36),
   // p3 inactiva pero con factura emitida
@@ -119,7 +125,12 @@ const obligaciones = [
   { id: "o1", emisor_id: EMI_PRI, tipo: "fraccionamiento", referencia: "RI 0230174741237",
     descripcion: "Art. 36", monto_total: 2577, cuotas: 9 },
   { id: "o2", emisor_id: EMI_PRI, tipo: "deuda_igv", referencia: "junio 2026",
-    descripcion: "IGV prorrogado", monto_total: 1931, cuotas: 1 }
+    descripcion: "IGV prorrogado", monto_total: 1931, cuotas: 1 },
+  /* Fraccionamiento sin nada vencido: tiene que avisar igual. La primera
+     cuota que se pasa es la que arranca el Art. 36, y avisar recién cuando
+     ya hay una vencida es avisar a mitad de camino. */
+  { id: "o3", emisor_id: EMI_PRI, tipo: "fraccionamiento", referencia: "RI 0230174779442",
+    descripcion: "Art. 36", monto_total: 1586, cuotas: 5 }
 ];
 /* como en la realidad: parte del IGV se pagó con la cuenta de detracciones */
 const pagos = [
@@ -141,7 +152,9 @@ const arrendamientos = [
 const cuotas = [
   { obligacion_id: "o1", numero: 1, vence: AYER,   monto: 302,  pagada_en: null },
   { obligacion_id: "o1", numero: 2, vence: PRONTO, monto: 297,  pagada_en: null },
-  { obligacion_id: "o2", numero: 1, vence: AYER,   monto: 1931, pagada_en: null }
+  { obligacion_id: "o2", numero: 1, vence: AYER,   monto: 1931, pagada_en: null },
+  { obligacion_id: "o3", numero: 1, vence: PRONTO,     monto: 320, pagada_en: null },
+  { obligacion_id: "o3", numero: 2, vence: dISO(40),   monto: 317, pagada_en: null }
 ];
 
 const TABLAS = {
@@ -256,6 +269,24 @@ setTimeout(async () => {
   ok("el alquiler lleva su código de tributo", /tributo 3011/.test(T));
   ok("avisa del riesgo de perder el fraccionamiento",
     /se pierde el fraccionamiento/.test(T));
+  /* El aviso sirve si dice qué pagar y hasta cuándo. "Una cuota vencida"
+     sin monto ni fecha no mueve a nadie. */
+  ok("el aviso dice qué cuota venció, cuándo y por cuánto",
+    /La cuota 1 venció el/.test(T) && /S\/ 302\.00/.test(T));
+  ok("el aviso dice cuál es la siguiente y qué pasa si también se pasa",
+    /Si la cuota 2/.test(T) && /S\/ 297\.00/.test(T));
+  ok("el aviso dice cuántos días quedan para evitar la pérdida",
+    /para pagar la vencida/.test(T));
+  /* Lo que pidió: avisar antes de la primera, no después. */
+  ok("avisa del fraccionamiento que todavía no tiene nada vencido",
+    /RI 0230174779442/.test(T) && /Nada vencido todavía/.test(T));
+  ok("al que no tiene nada vencido le dice qué cuota viene y por cuánto",
+    /La cuota 1 vence en/.test(T) && /S\/ 320\.00/.test(T));
+  /* Un fraccionamiento con la cuota del mes por vencer no está en peligro:
+     está por pagarse. Si cuentan igual, el indicador deja de decir algo. */
+  ok("el KPI de riesgo cuenta sólo el que está en peligro, no el que está por pagar",
+    /1 fraccionamiento en peligro/.test(T) &&
+    !/2 fraccionamientos en peligro/.test(T));
   ok("ofrece marcar la cuota como pagada", /marcar pagada/.test(T));
   ok("la cuota que vence pronto entra en esta semana", /Esta semana/.test(T));
 
@@ -362,8 +393,9 @@ setTimeout(async () => {
   await irA("Deuda");
   const TD = txt();
   ok("deuda arranca en lo mío", /Mías/.test(TD) && /Llevan por fuera/.test(TD));
-  /* el alquiler sin pagar también es deuda: 2,530 + 147.50 = 2,678 */
-  ok("deudas: el saldo total incluye el alquiler", TD.indexOf("S/ 2,678") >= 0);
+  /* el alquiler sin pagar también es deuda:
+     o1 599 + o2 1,931 + o3 637 = 3,167, más 147.50 del alquiler = 3,314.50 */
+  ok("deudas: el saldo total incluye el alquiler", TD.indexOf("S/ 3,315") >= 0);
   ok("deudas: el vencido incluye el alquiler vencido",
     TD.indexOf("S/ 2,381") >= 0);
   ok("deudas: dice que además hay meses de alquiler",
@@ -428,6 +460,22 @@ setTimeout(async () => {
   /* el cronograma del RI se pega tal cual del PDF: esto es lo que más fácil
      se rompe, así que va fijado contra las líneas reales */
   {
+    const cd = dom.window.correoDe;
+    ok("expone correoDe()", typeof cd === "function");
+    if (typeof cd === "function") {
+      /* Lo de Portugal lo recibe Martín; lo de las asesoras, asesoresrw.
+         Si gana el correo del receptor, la factura no le llega a quien paga. */
+      ok("el correo de la regla manda sobre el general del receptor",
+        cd({ correo_facturacion: "martin.ruiz@renaware.com" },
+           { correo_facturacion: "asesoresrw@renaware.com" })
+        === "martin.ruiz@renaware.com");
+      ok("sin correo propio usa el general del receptor",
+        cd({ correo_facturacion: null },
+           { correo_facturacion: "asesoresrw@renaware.com" })
+        === "asesoresrw@renaware.com");
+      ok("sin ninguno de los dos no inventa un correo", cd(null, null) === null);
+    }
+
     const leer = dom.window.leerCronograma;
     ok("expone leerCronograma()", typeof leer === "function");
     if (typeof leer === "function") {
@@ -558,7 +606,8 @@ setTimeout(async () => {
   await irA("Resumen");
   const TR = txt();
   ok("facturado = S/ 5,664", TR.indexOf("S/ 5,664") >= 0);
-  ok("pendiente = S/ 590", TR.indexOf("S/ 590") >= 0);
+  /* 236 + 354 + 944 */
+  ok("pendiente = S/ 1,534", TR.indexOf("S/ 1,534") >= 0);
   ok("trabado sin RUC = S/ 354", TR.indexOf("S/ 354") >= 0);
   ok("cuenta 1 persona sin RUC", /1 personas|1 persona/.test(TR));
 
@@ -573,8 +622,17 @@ setTimeout(async () => {
     /comisiones pendientes de/.test(T2) || /comisión pendiente de/.test(T2));
   ok("arranca en los que sí se pueden facturar",
     /ANA PRUEBA UNO/.test(T2) && !/BEA PRUEBA DOS/.test(T2));
+  /* "neto" se leía como lo que cae al banco, y con detracción no es lo mismo.
+     La diferencia es plata, así que la línea tiene que decir las dos cosas. */
+  ok("la lista dice base y no neto",
+    /base S\/ 200\.00/.test(T2) && !/neto S\//.test(T2));
+  ok("con detracción la lista dice cuánto cae al banco",
+    /base S\/ 800\.00/.test(T2) && /detr S\/ 94\.40/.test(T2) &&
+    /al banco S\/ 849\.60/.test(T2));
   const checks = [...doc.querySelectorAll('input[type=checkbox]')];
-  ok("hay 1 casilla, la de quien tiene RUC", checks.length === 1, "hay " + checks.length);
+  /* dos: los dos pendientes de ANA. El de BEA no tiene casilla porque sin RUC
+     no se puede facturar. */
+  ok("hay 2 casillas, las de quien tiene RUC", checks.length === 2, "hay " + checks.length);
   ok("esa casilla está habilitada", checks.some(c => !c.disabled));
   /* todo lo que hace falta para emitir, en la misma línea */
   {
@@ -589,6 +647,7 @@ setTimeout(async () => {
         /A quién se le factura/.test(TL) && /Glosa/.test(TL) &&
         /Valor de venta/.test(TL) && /IGV 18%/.test(TL));
       ok("el detalle dice a qué cuenta cae", /Cuenta para el depósito/.test(TL));
+      ok("el detalle dice a qué correo se manda", /Se envía a/.test(TL));
       det.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
       await pausa(60);
     }

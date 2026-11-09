@@ -63,15 +63,32 @@ registro, calcula lo que se debe y avisa antes de que venza.
   cuando el total con IGV pasa de S/700; Bros Consultores 12% sin umbral.
   Lo define `fact_reglas_emision` por par emisor-receptor; si no hay regla,
   se cae al genérico de `fact_config`.
+- El **correo de facturación** también es del par, no del receptor: lo de
+  Portugal Research lo recibe Martín y lo de las asesoras va a `asesoresrw`.
+  Vive en `fact_reglas_emision.correo_facturacion`; vacío = el general del
+  receptor (`fact_receptores.correo_facturacion`).
 - Recibo por honorarios: sin IGV, con retención de 8% de cuarta categoría.
   Es otro mecanismo, no una detracción.
 - Una factura anulada no se borra: se declaró, y lo que la cancela es la nota
   de crédito, que entra en negativo. Excluirla además sería restar dos veces.
 - "Mío" sale de `fact_emisores.relacion = 'propio'`, no de una lista en el
   código: Portugal Research, el RUC 10 de Nelson, su esposa y su suegro.
+- Un contrato puede cambiar a mitad de año: `eq_personas.fpd_desde_semana`
+  dice desde qué semana del FPD las comisiones de esa persona entran a
+  facturar. Portugal Research arranca en la 44: lo anterior figura en el
+  reporte pero no es suyo de facturar. Sin esa marca, cada reporte nuevo
+  volvería a crearlas como pendientes.
+- En la lista de Por facturar la cifra chica es la **base**, no lo que cae al
+  banco. Con detracción no son lo mismo, y llamarla "neto" hacía leer el
+  número equivocado.
 - De quien lleva la contabilidad por fuera (`eq_personas.contabilidad`) no se
   piden las casillas del 0621: no vamos a tener ese dato. Con esa gente sólo se
   controla la fecha y si avisó que ya declaró.
+- Art. 36: se pierde el fraccionamiento con **dos cuotas consecutivas**
+  impagas, y la pérdida vuelve exigible todo el saldo. Por eso el aviso no
+  espera a que haya una vencida: también entra la que está por vencer, en
+  ámbar y sin contar como peligro, para que el indicador siga queriendo decir
+  algo cuando se pone en rojo.
 - Un NPS no es un pago. Se guarda como `estado = 'nps'` y sólo pasa a `pagado`
   con la constancia.
 - **La obligación mensual nace del RUC, no de haber facturado.** Quien tiene RUC
