@@ -66,6 +66,16 @@ const facturas = [
   /* p1: otro pendiente, este sí pasa de 700 con IGV -> lleva detracción.
      Hace falta para que la línea tenga que decir qué cae al banco. */
   fac("f8", "p1", "ANA PRUEBA UNO", "10296091861", 800, "borrador", ANIO + "-09-18", 38),
+  /* Lo propio de Nelson: recibo por honorarios, sin persona en el padrón
+     (su RUC 10 vive en el emisor, no en eq_personas) y sin semana del FPD.
+     Igual al registro real que quedó con IGV de más. */
+  { id: "f9", persona_id: null, asesor: "PORTUGAL ROMAN NELSON", codigo_asesor: null,
+    ruc: "10449906662", periodo_ind: null, semana: null, etiqueta_semana: null,
+    serie: null, numero: null, fecha_emision: ANIO + "-10-24",
+    descripcion: "Servicio de gerenciamiento empresarial",
+    neto: 5000, igv: 0, total: 5000, detraccion: 0, a_banco: 4600, retencion: 400,
+    renta: 50, estado: "borrador", fecha_estimada: true, origen: "manual",
+    tipo_comprobante: "rxh", emisor_id: "e-nat", receptor_id: "r-pri" },
   // p2 sin RUC: pendiente trabado
   fac("f4", "p2", "BEA PRUEBA DOS", null, 300, "borrador", ANIO + "-09-04", 36),
   // p3 inactiva pero con factura emitida
@@ -153,8 +163,11 @@ const cuotas = [
   { obligacion_id: "o1", numero: 1, vence: AYER,   monto: 302,  pagada_en: null },
   { obligacion_id: "o1", numero: 2, vence: PRONTO, monto: 297,  pagada_en: null },
   { obligacion_id: "o2", numero: 1, vence: AYER,   monto: 1931, pagada_en: null },
-  { obligacion_id: "o3", numero: 1, vence: PRONTO,     monto: 320, pagada_en: null },
-  { obligacion_id: "o3", numero: 2, vence: dISO(40),   monto: 317, pagada_en: null }
+  /* pagada, pero tres días después: no cuesta nada hasta que cuesta el
+     fraccionamiento entero, así que tiene que verse */
+  { obligacion_id: "o3", numero: 1, vence: AYER,     monto: 300, pagada_en: HOY },
+  { obligacion_id: "o3", numero: 2, vence: PRONTO,   monto: 320, pagada_en: null },
+  { obligacion_id: "o3", numero: 3, vence: dISO(40), monto: 317, pagada_en: null }
 ];
 
 const TABLAS = {
@@ -281,7 +294,7 @@ setTimeout(async () => {
   ok("avisa del fraccionamiento que todavía no tiene nada vencido",
     /RI 0230174779442/.test(T) && /Nada vencido todavía/.test(T));
   ok("al que no tiene nada vencido le dice qué cuota viene y por cuánto",
-    /La cuota 1 vence en/.test(T) && /S\/ 320\.00/.test(T));
+    /La cuota 2 vence en/.test(T) && /S\/ 320\.00/.test(T));
   /* Un fraccionamiento con la cuota del mes por vencer no está en peligro:
      está por pagarse. Si cuentan igual, el indicador deja de decir algo. */
   ok("el KPI de riesgo cuenta sólo el que está en peligro, no el que está por pagar",
@@ -414,7 +427,11 @@ setTimeout(async () => {
     /interés moratorio/.test(TD));
   ok("deudas: dice cómo se paga", /Formulario 1662/.test(TD) && /8021/.test(TD));
   ok("deudas: deja marcar una cuota como pagada",
-    [...doc.querySelectorAll("button.btn.sec.sm")].some(b => b.textContent === "pagada"));
+    [...doc.querySelectorAll("button.btn.sec.sm")]
+      .some(b => b.textContent === "marcar pagada"));
+  /* Pagar tarde es el paso previo a perder el fraccionamiento. Si la tabla
+     dice sólo "pagada", el patrón no se ve. */
+  ok("deudas: dice cuántos días tarde se pagó una cuota", /3 días tarde/.test(TD));
 
   /* lo que pidió Nelson: cargar deudas, pagarlas por varios medios y
      fraccionar el saldo */
@@ -606,8 +623,8 @@ setTimeout(async () => {
   await irA("Resumen");
   const TR = txt();
   ok("facturado = S/ 5,664", TR.indexOf("S/ 5,664") >= 0);
-  /* 236 + 354 + 944 */
-  ok("pendiente = S/ 1,534", TR.indexOf("S/ 1,534") >= 0);
+  /* 236 + 354 + 944 + 5,000 del recibo por honorarios */
+  ok("pendiente = S/ 6,534", TR.indexOf("S/ 6,534") >= 0);
   ok("trabado sin RUC = S/ 354", TR.indexOf("S/ 354") >= 0);
   ok("cuenta 1 persona sin RUC", /1 personas|1 persona/.test(TR));
 
@@ -615,6 +632,10 @@ setTimeout(async () => {
   await irA("Por facturar");
   const T2 = txt();
   ok("ofrece con RUC / sin RUC", /Con RUC/.test(T2) && /Sin RUC/.test(T2));
+  ok("el RUC propio sin ficha cuenta como mío, no como de afuera",
+    /Míos 1/.test(T2.replace(/\s+/g," ")) ||
+    /Míos1/.test(T2.replace(/\s+/g,"")), "chips: " +
+    (T2.match(/Míos.{0,24}/) || ["?"])[0]);
   ok("avisa que falta la fecha del reporte de Aurora",
     /último reporte de Aurora/.test(T2));
   /* la pestaña cuenta comisiones y la lista muestra personas: hay que decirlo */
@@ -625,32 +646,70 @@ setTimeout(async () => {
   /* "neto" se leía como lo que cae al banco, y con detracción no es lo mismo.
      La diferencia es plata, así que la línea tiene que decir las dos cosas. */
   ok("la lista dice base y no neto",
-    /base S\/ 200\.00/.test(T2) && !/neto S\//.test(T2));
+    /base S\/ 200\.00/.test(T2) && !/neto S\/ 200/.test(T2));
+  /* Un recibo por honorarios no tiene base ni IGV: tiene bruto, retención y
+     neto, que son las palabras que trae el comprobante. */
+  ok("el recibo por honorarios se muestra con sus propias palabras",
+    /bruto S\/ 5,000\.00/.test(T2) && /ret S\/ 400\.00/.test(T2) &&
+    /neto S\/ 4,600\.00/.test(T2));
+  ok("el recibo por honorarios no muestra IGV en la lista",
+    !/S\/ 5,900/.test(T2));
+  /* Su RUC vive en el emisor, no en el padrón: decir "sin RUC" de un RUC
+     que existe dejaba la línea pareciendo intrabajable. */
+  ok("toma el RUC del comprobante cuando no hay ficha en el padrón",
+    /RUC 10449906662/.test(T2) && /propio, fuera del padrón/.test(T2));
+  /* Y no sólo en la cabecera: la línea tampoco puede quedar trabada por un
+     RUC que sí existe, ni pedirle cuenta de detracción a un recibo. */
+  ok("la línea con RUC propio no queda trabada",
+    !/Servicio de gerenciamiento empresarial sin RUC/
+       .test(T2.replace(/\s+/g," ")) &&
+    !/falta cuenta de detracción/.test(T2));
   ok("con detracción la lista dice cuánto cae al banco",
     /base S\/ 800\.00/.test(T2) && /detr S\/ 94\.40/.test(T2) &&
     /al banco S\/ 849\.60/.test(T2));
   const checks = [...doc.querySelectorAll('input[type=checkbox]')];
   /* dos: los dos pendientes de ANA. El de BEA no tiene casilla porque sin RUC
      no se puede facturar. */
-  ok("hay 2 casillas, las de quien tiene RUC", checks.length === 2, "hay " + checks.length);
+  ok("hay 3 casillas, las de quien tiene RUC", checks.length === 3, "hay " + checks.length);
   ok("esa casilla está habilitada", checks.some(c => !c.disabled));
   /* todo lo que hace falta para emitir, en la misma línea */
   {
-    const det = [...doc.querySelectorAll("button.lk")]
-      .find(x => x.textContent === "detalle");
-    ok("cada comisión abre su detalle", !!det);
-    if (det) {
-      det.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    /* La lista ordena por monto: el primero es el recibo por honorarios. */
+    const abrir = async (i) => {
+      const bs = [...doc.querySelectorAll("button.lk")]
+        .filter(x => x.textContent === "detalle");
+      if (!bs[i]) return null;
+      bs[i].dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
       await pausa(80);
-      const TL = txt();
-      ok("el detalle trae receptor, glosa e importes",
+      return txt();
+    };
+    const cerrar = async () => {
+      const c = [...doc.querySelectorAll("button.lk")]
+        .find(x => x.textContent === "cerrar");
+      if (c) c.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+      await pausa(60);
+    };
+
+    const TL = await abrir(0);
+    ok("cada comisión abre su detalle", !!TL);
+    if (TL) {
+      ok("el detalle del recibo trae bruto, retención y neto",
         /A quién se le factura/.test(TL) && /Glosa/.test(TL) &&
-        /Valor de venta/.test(TL) && /IGV 18%/.test(TL));
+        /Monto bruto/.test(TL) && /Retención 8%/.test(TL) && /Monto neto/.test(TL));
+      /* Que diga "no lleva" y no un 0 suelto: el 0 se lee como un error. */
+      ok("el detalle del recibo dice que no lleva IGV y por qué",
+        /no lleva/.test(TL) && /renta de cuarta/.test(TL));
       ok("el detalle dice a qué cuenta cae", /Cuenta para el depósito/.test(TL));
       ok("el detalle dice a qué correo se manda", /Se envía a/.test(TL));
-      det.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-      await pausa(60);
+      /* Un error anotado tiene que poder deshacerse mientras no se emitió. */
+      ok("el detalle deja borrar lo que todavía no se emitió", /borrar/.test(TL));
+      await cerrar();
     }
+
+    const TLf = await abrir(1);
+    ok("el detalle de la factura sí trae valor de venta e IGV",
+      !!TLf && /Valor de venta/.test(TLf) && /IGV 18%/.test(TLf));
+    if (TLf) await cerrar();
   }
   await chip("Sin RUC");
   const T2b = txt();

@@ -240,7 +240,12 @@ function Modal(p){
 /* Cuatro grupos, no dos: lo propio, lo que lleva el contador recomendado, lo
    que cada uno lleva por fuera, y todo. De los de afuera no vamos a tener las
    casillas del 0621, asi que tampoco se las pedimos. */
-function grupoDe4(esMio, per){
+function grupoDe4(esMio, per, rucAlt){
+  /* rucAlt: lo propio se anota a mano y no tiene ficha en el padron. Mirando
+     solo la persona, el RUC de Nelson caia en "llevan por fuera", que es
+     justo lo contrario de lo que es. */
+  var ruc = (per && per.ruc) || rucAlt;
+  if(ruc && esMio(ruc)) return "mio";
   if(!per) return "externa";
   if(esMio(per.ruc)) return "mio";
   return per.contabilidad === "contador" ? "contador"
@@ -379,7 +384,10 @@ function App(props){
     return r2(borradores.reduce(function(s,f){ return s + Number(f.total); },0));
   },[borradores]);
   var sinRuc = useMemo(function(){
-    var fs = borradores.filter(function(f){ return !(P[f.persona_id]||{}).ruc; });
+    /* El RUC puede venir del comprobante y no del padrón: lo propio se anota
+       a mano. Contarlo como trabado inflaba el número que mide la gestión. */
+    var fs = borradores.filter(function(f){
+      return !((P[f.persona_id]||{}).ruc || f.ruc); });
     var ids = {}; fs.forEach(function(f){ ids[f.persona_id] = 1; });
     return {monto:r2(fs.reduce(function(s,f){ return s+Number(f.total); },0)),
             personas:Object.keys(ids).length};
@@ -512,7 +520,7 @@ function App(props){
         k:"c|"+c.obligacion_id+"|"+c.numero, clase:o.tipo, cuota:c,
         mio: e.relacion === "propio",
         grupo: e.relacion === "propio" ? "mio"
-             : grupoDe4(esMio, e.persona_id ? P[e.persona_id] : null),
+             : grupoDe4(esMio, e.persona_id ? P[e.persona_id] : null, e.ruc),
         quien:e.nombre || "\u2014", ruc:e.ruc || null,
         que: o.tipo === "fraccionamiento"
           ? "Cuota " + c.numero + " de " + o.cuotas + " \u00b7 " + (o.referencia||"")
@@ -823,6 +831,22 @@ function App(props){
         });
     });
   }
+  function borrarPendiente(f){
+    /* Sólo lo que nunca se emitió. Una emitida no se borra: se anula con
+       nota de crédito, que es otro comprobante y deja rastro en SUNAT. */
+    if(f.estado !== "borrador"){
+      avisar("Sólo se puede borrar lo que todavía no se emitió.");
+      return Promise.resolve(false);
+    }
+    return db.from("fact_facturas").delete().eq("id", f.id).select()
+      .then(function(r){
+        if(r.error){ avisar("No se pudo borrar: " + r.error.message); return false; }
+        setFacturas(function(prev){
+          return prev.filter(function(x){ return x.id !== f.id; }); });
+        avisar("Pendiente borrado.");
+        return true;
+      });
+  }
   function crearPendiente(fila){
     return db.from("fact_facturas").insert(fila).select()
       .then(function(r){
@@ -992,6 +1016,7 @@ function App(props){
         borradores:borradores,totFact:totFact,totPend:totPend,sinRuc:sinRuc,
         oblig:oblig,obPend:obPend,vencidas:vencidas,ir:setVista}) : null,
       vista==="facturar" ? h(PorFacturar,{borradores:borradores,emitidas:emitidas,
+        borrar:borrarPendiente,
         P:P,cfg:cfg,esMio:esMio,emisores:emisores,receptores:receptores,
         reglas:reglas,crear:crearPendiente,
         irAPadron:function(pid){ setVerPersona(pid); setVista("padron"); },
@@ -1090,6 +1115,9 @@ function DetalleLinea(p){
   var total = Number(f.total);
   var detr = Number(f.detraccion) || 0;
   var aplica = detr > 0;
+  var esRxh = f.tipo_comprobante === "rxh";
+  var ret = Number(f.retencion) || 0;
+  var rpct = g && g.retencion_pct != null ? Number(g.retencion_pct) : null;
 
   var Fila = function(l, v, nota){
     return h("div",{style:{display:"flex",justifyContent:"space-between",
@@ -1122,18 +1150,30 @@ function DetalleLinea(p){
                     "el general del receptor")
                 : h("div",{className:"hint",style:{marginTop:1}},
                     "se carga en Ajustes, en la regla o en el receptor")))),
-      h("div",null,
-        h(Caps,null,"Importes"),
-        Fila("Valor de venta", money(f.neto)),
-        Fila("IGV 18%", money(f.igv)),
-        Fila("Total", money(total)),
-        aplica
-          ? Fila("Detracción " + (pct != null ? Math.round(pct*100) + "%" : ""),
-              "− " + money(detr),
-              "bien " + ((g && g.codigo_bien) || "037"))
-          : Fila("Detracción", "no aplica",
-              umbral ? "el total no pasa de " + money(umbral) : null),
-        Fila("Cae al banco", money(r2(total - detr))))),
+      esRxh
+        ? h("div",null,
+            h(Caps,null,"Importes"),
+            Fila("Monto bruto", money(f.neto)),
+            ret > 0
+              ? Fila("Retención " + (rpct != null ? Math.round(rpct*100) + "%" : ""),
+                  "− " + money(ret), "cuarta categoría, tributo 3042")
+              : Fila("Retención", "no aplica",
+                  "F.1609 presentado" + (e.suspension_4ta_anio
+                    ? " para el ejercicio " + e.suspension_4ta_anio : "")),
+            Fila("Monto neto", money(r2(Number(f.neto) - ret))),
+            Fila("IGV", "no lleva", "el recibo por honorarios es renta de cuarta"))
+        : h("div",null,
+            h(Caps,null,"Importes"),
+            Fila("Valor de venta", money(f.neto)),
+            Fila("IGV 18%", money(f.igv)),
+            Fila("Total", money(total)),
+            aplica
+              ? Fila("Detracción " + (pct != null ? Math.round(pct*100) + "%" : ""),
+                  "− " + money(detr),
+                  "bien " + ((g && g.codigo_bien) || "037"))
+              : Fila("Detracción", "no aplica",
+                  umbral ? "el total no pasa de " + money(umbral) : null),
+            Fila("Cae al banco", money(r2(total - detr))))),
 
     h("div",{className:"sep",style:{marginTop:12,paddingTop:10}},
       h("div",{className:"dos",style:{gap:18}},
@@ -1166,6 +1206,7 @@ function PorFacturar(p){
   var s6 = useState(false), nueva = s6[0], setNueva = s6[1];
   var s7 = useState("todas"), amb = s7[0], setAmb = s7[1];
   var s8 = useState(null), abierta = s8[0], setAbierta = s8[1];
+  var s9 = useState(null), borrando = s9[0], setBorrando = s9[1];
   var EMI = useMemo(function(){
     var m = {}; (p.emisores||[]).forEach(function(e){ m[e.id] = e; }); return m;
   },[p.emisores]);
@@ -1196,10 +1237,10 @@ function PorFacturar(p){
   /* Dos ejes distintos: quién lleva la contabilidad, y si se le puede facturar
      hoy. Uno no sustituye al otro. */
   var ctaA = {mio:0, contador:0, externa:0, sin_definir:0};
-  todosGrupos.forEach(function(g){ ctaA[grupoDe4(p.esMio, g.per)]++; });
+  todosGrupos.forEach(function(g){ ctaA[grupoDe4(p.esMio, g.per, g.fs[0].ruc)]++; });
   var totalA = todosGrupos.length;
   todosGrupos = todosGrupos.filter(function(g){
-    var x = grupoDe4(p.esMio, g.per);
+    var x = grupoDe4(p.esMio, g.per, g.fs[0].ruc);
     if(amb === "externa") return x === "externa" || x === "sin_definir";
     return ambitoOk(amb, x);
   });
@@ -1212,6 +1253,11 @@ function PorFacturar(p){
   };
 
   var elegidas = Object.keys(sel).filter(function(k){ return sel[k]; });
+  /* Lo anotado a mano no trae semana del FPD. Si no se pregunta acá, queda
+     "sin periodo" para siempre y después no se sabe a qué PB correspondía. */
+  var unicaSel = elegidas.length === 1
+    ? p.borradores.filter(function(f){ return f.id === elegidas[0]; })[0] : null;
+  var faltaPeriodo = !!(unicaSel && unicaSel.periodo_ind == null);
   var montoSel = r2(p.borradores.filter(function(f){ return sel[f.id]; })
     .reduce(function(s,f){ return s+Number(f.total); },0));
 
@@ -1231,11 +1277,17 @@ function PorFacturar(p){
     });
   }
   function bloqueo(per, f){
-    /* Lo propio se anota a mano y no tiene persona en el padron: ahi el RUC y
-       la cuenta de detraccion viven en el emisor, ya validados por la regla. */
-    if(!per) return f.ruc ? null : "sin RUC";
-    if(!per.ruc) return "sin RUC";
-    if(Number(f.total) > (p.cfg.detraccion_umbral||700) && !per.cuenta_detraccion)
+    /* Lo propio se anota a mano y no tiene ficha en el padron: ahi el RUC y
+       la cuenta de detraccion viven en el emisor, ya validados por la regla.
+       Ojo: quien llama pasa {} y no null cuando no hay ficha, asi que
+       preguntar por !per no alcanzaba y la linea salia "sin RUC" teniendo
+       RUC. */
+    var conFicha = !!(per && per.ruc);
+    if(!conFicha) return f.ruc ? null : "sin RUC";
+    /* El recibo por honorarios no lleva detraccion: lleva retencion de 4ta.
+       Pedirle la cuenta del Banco de la Nacion lo trababa sin motivo. */
+    if(f.tipo_comprobante !== "rxh" &&
+       Number(f.total) > (p.cfg.detraccion_umbral||700) && !per.cuenta_detraccion)
       return "falta cuenta de detracción";
     return null;
   }
@@ -1303,9 +1355,16 @@ function PorFacturar(p){
               display:"flex",justifyContent:"space-between",gap:10,flexWrap:"wrap"}},
             h("div",null,
               h("div",{style:{fontSize:14,fontWeight:600}}, per.nombre || g.fs[0].asesor),
-              h("div",{className:"hint"},
-                per.ruc ? ("RUC "+per.ruc+" · grupo "+grupoDe(per.ruc))
-                        : "sin RUC — no se puede facturar")),
+              (function(){
+                /* El RUC propio no está en el padrón: está en el emisor y
+                   viaja en el comprobante. Mirar sólo la persona hacía decir
+                   "sin RUC" de un RUC que sí existe. */
+                var ruc = per.ruc || g.fs[0].ruc;
+                return h("div",{className:"hint"},
+                  ruc ? ("RUC "+ruc+" · grupo "+grupoDe(ruc) +
+                         (!per.ruc ? " · propio, fuera del padrón" : ""))
+                      : "sin RUC — no se puede facturar");
+              })()),
             h("div",{style:{textAlign:"right"}},
               h("div",{className:"mono",style:{fontSize:15}}, money(suma)),
               h("button",{className:"lk",onClick:function(){ todasDe(g); }},
@@ -1334,16 +1393,42 @@ function PorFacturar(p){
                 h("div",{style:{textAlign:"right"}},
                   h("div",{className:"mono",style:{fontSize:13}}, money(f.total)),
                   h("div",{className:"hint"},
-                    /* "neto" se lee como lo que llega, y es la base del IGV.
-                       Con detraccion no son lo mismo y la diferencia es plata. */
-                    "base "+money(f.neto)+
-                    (Number(f.detraccion)>0
-                      ? " · detr "+money(f.detraccion)+
-                        " · al banco "+money(r2(Number(f.total)-Number(f.detraccion)))
-                      : ""))),
-                h("button",{className:"lk",style:{minWidth:54,textAlign:"right"},
-                  onClick:function(){ setAbierta(abierta===f.id ? null : f.id); }},
-                  abierta===f.id ? "cerrar" : "detalle")),
+                    /* "neto" se lee como lo que llega, y en una factura es la
+                       base del IGV. Con detraccion no son lo mismo y la
+                       diferencia es plata. En un recibo por honorarios las
+                       palabras son otras: bruto, retencion y neto, que es lo
+                       que dice el comprobante. */
+                    f.tipo_comprobante === "rxh"
+                      ? "bruto "+money(f.neto)+
+                        (Number(f.retencion)>0
+                          ? " · ret "+money(f.retencion)+
+                            " · neto "+money(r2(Number(f.neto)-Number(f.retencion)))
+                          : " · sin retención")
+                      : "base "+money(f.neto)+
+                        (Number(f.detraccion)>0
+                          ? " · detr "+money(f.detraccion)+
+                            " · al banco "+money(r2(Number(f.total)-Number(f.detraccion)))
+                          : ""))),
+                h("div",{style:{minWidth:54,textAlign:"right"}},
+                  h("button",{className:"lk",
+                    onClick:function(){ setAbierta(abierta===f.id ? null : f.id);
+                                        setBorrando(null); }},
+                    abierta===f.id ? "cerrar" : "detalle"),
+                  abierta===f.id
+                    ? (borrando === f.id
+                        ? h("div",{className:"mono",style:{fontSize:10,marginTop:3}},
+                            h("span",{style:{color:"var(--alerta)"}},"¿seguro? "),
+                            h("button",{className:"lk",style:{color:"var(--alerta)"},
+                              onClick:function(){
+                                p.borrar(f).then(function(){ setBorrando(null); }); }},"sí"),
+                            " · ",
+                            h("button",{className:"lk",
+                              onClick:function(){ setBorrando(null); }},"no"))
+                        : h("div",{style:{marginTop:3}},
+                            h("button",{className:"lk",style:{fontSize:10,
+                                color:"var(--ink40)"},
+                              onClick:function(){ setBorrando(f.id); }},"borrar")))
+                    : null)),
               abierta === f.id
                 ? h(DetalleLinea,{f:f, emisor:EMI[f.emisor_id],
                     receptor:REC[f.receptor_id],
@@ -1360,7 +1445,8 @@ function PorFacturar(p){
           h("button",{className:"btn",onClick:function(){ setModal(true); }},
             "Marcar como facturadas"))) : null))),
 
-    modal ? h(ModalFacturar,{n:elegidas.length,onCerrar:function(){ setModal(false); },
+    modal ? h(ModalFacturar,{n:elegidas.length,sinPeriodo:faltaPeriodo,
+      onCerrar:function(){ setModal(false); },
       onOk:function(fecha,serie,numero,extra){
         p.marcar(elegidas, fecha, serie, numero, extra).then(function(){
           setSel({}); setModal(false);
@@ -1385,6 +1471,7 @@ function NuevaPendiente(p){
   var s5 = useState(hoyISO()), fecha = s5[0], setFecha = s5[1];
   var s6 = useState(false), yendo = s6[0], setYendo = s6[1];
   var s7 = useState(""), err = s7[0], setErr = s7[1];
+  var s8 = useState(false), tocada = s8[0], setTocada = s8[1];
 
   useEffect(function(){
     if(!eid && propios.length){
@@ -1404,6 +1491,20 @@ function NuevaPendiente(p){
   },[eid, deEste]);
 
   var regla = reglaDe(p.reglas, eid, rid);
+  /* La glosa sale de la regla del par, no de la última que se usó: con el
+     receptor cambiado quedaba pegada la glosa de otro cliente. Si la escribe
+     a mano, manda lo que escribió. */
+  useEffect(function(){
+    if(tocada) return;
+    var g = reglaDe(p.reglas, eid, rid);
+    setGlosa((g && g.glosa_plantilla) || "");
+  },[eid, rid, tocada, p.reglas]);
+
+  function limpiar(){
+    setNeto(""); setGlosa(""); setTocada(false); setFecha(hoyISO()); setErr("");
+  }
+  function cerrar(){ limpiar(); p.cerrar(); }
+
   var emisor = propios.filter(function(e){ return e.id === eid; })[0] || null;
   var n = Number(String(neto).replace(/,/g,"")) || 0;
   var c = calcular(regla, n, p.cfg);
@@ -1426,7 +1527,7 @@ function NuevaPendiente(p){
       a_banco: c.banco, renta: c.renta, estado: "borrador"
     }).then(function(ok){
       setYendo(false);
-      if(ok){ setNeto(""); setGlosa(""); p.cerrar(); }
+      if(ok){ cerrar(); }
       else setErr("No se pudo guardar.");
     });
   }
@@ -1461,7 +1562,7 @@ function NuevaPendiente(p){
       h("span",{className:"lbl"},"Glosa"),
       h("textarea",{className:"in",rows:2,value:glosa,
         placeholder:(regla && regla.glosa_plantilla) || "la que te pasa Martín",
-        onChange:function(e){ setGlosa(e.target.value); }})),
+        onChange:function(e){ setTocada(true); setGlosa(e.target.value); }})),
 
     n > 0 ? h("div",{className:"hint",style:{marginTop:10,lineHeight:1.8}},
       "Total " + money(c.total) +
@@ -1475,7 +1576,7 @@ function NuevaPendiente(p){
     h("div",{className:"row",style:{marginTop:14,gap:10}},
       h("button",{className:"btn",disabled:yendo,onClick:guardar},
         yendo ? "guardando…" : "anotar como pendiente"),
-      h("button",{className:"lk",onClick:p.cerrar},"cancelar")));
+      h("button",{className:"lk",onClick:cerrar},"cancelar")));
 }
 
 function ModalFacturar(p){
@@ -1485,6 +1586,7 @@ function ModalFacturar(p){
   var s4 = useState(""), oper = s4[0], setOper = s4[1];
   var s5 = useState(""), pdf = s5[0], setPdf = s5[1];
   var s6 = useState(""), xml = s6[0], setXml = s6[1];
+  var s7 = useState(""), pb = s7[0], setPb = s7[1];
   var una = p.n === 1;
   /* Con una sola se guarda el numero; con varias no, porque cada factura
      tiene el suyo y poner el mismo en todas seria inventar datos. */
@@ -1510,6 +1612,10 @@ function ModalFacturar(p){
       una ? h("div",{className:"dos",style:{gap:12,marginTop:12}},
         h(Campo,{label:"PDF",value:pdf,onChange:setPdf,ph:"enlace o ruta"}),
         h(Campo,{label:"XML",value:xml,onChange:setXml,ph:"enlace o ruta"})) : null,
+      una && p.sinPeriodo ? h("div",{style:{marginTop:12,maxWidth:300}},
+        h(Campo,{label:"Periodo (PB)",value:pb,onChange:setPb,ph:"21",
+          nota:"el que va en la glosa. Esta línea no trae semana del FPD; sin "+
+               "esto queda sin periodo."})) : null,
       !una ? h("div",{className:"card hint",style:{padding:"10px 13px",
           marginTop:14,lineHeight:1.7}},
         "Cada factura tiene su propio número, así que en bloque no se guarda "+
@@ -1521,8 +1627,13 @@ function ModalFacturar(p){
       h("button",{className:"btn sec",onClick:p.onCerrar},"Cancelar"),
       h("button",{className:"btn ok",disabled:!fecha || falta,
         onClick:function(){
-          p.onOk(fecha, serie, num, {numero_operacion:oper||null,
-            comprobante_url:pdf||null, xml_url:xml||null});
+          var extra = {numero_operacion:oper||null,
+            comprobante_url:pdf||null, xml_url:xml||null};
+          /* PB 21 es el periodo_ind 20: el padrón cuenta desde cero y la
+             glosa desde uno. */
+          if(p.sinPeriodo && String(pb).trim() !== "" && Number(pb) > 0)
+            extra.periodo_ind = Number(pb) - 1;
+          p.onOk(fecha, serie, num, extra);
         }}, falta ? "Falta el número" : "Confirmar")));
 }
 
@@ -2865,6 +2976,7 @@ function Altas(p){
   var s3 = useState(VE), fe = s3[0], setFe = s3[1];
   var s4 = useState(""), err = s4[0], setErr = s4[1];
   var s5 = useState(false), yendo = s5[0], setYendo = s5[1];
+  var s6 = useState(""), bq = s6[0], setBq = s6[1];
 
   function setR(k){ return function(v){
     setFr(function(x){ var n=Object.assign({},x); n[k]=v; return n; }); }; }
@@ -2912,6 +3024,48 @@ function Altas(p){
         return h("button",{key:x[0],className:"chip"+(que===x[0]?" on":""),
           onClick:function(){ setQue(x[0]); setErr(""); }}, x[1]);
       })),
+
+    (function(){
+      /* Antes de dar de alta hay que poder ver si ya está: si no, se crea
+         dos veces el mismo RUC y después no se sabe cuál regla vale. */
+      var esRec = que === "receptor";
+      var todos = (esRec ? p.receptores : p.emisores).map(function(x){
+        return {id:x.id, ruc:x.ruc,
+                nombre: esRec ? x.razon_social : x.nombre,
+                nota: esRec ? (x.correo_facturacion || "")
+                            : ((x.relacion === "propio" ? "RUC propio"
+                               : x.relacion === "asesor" ? "asesor" : "externo") +
+                               (x.activo === false ? " · inactivo" : ""))};
+      });
+      var vis = todos.filter(function(x){ return coincide(x, bq); });
+      vis = vis.slice().sort(function(a,b){
+        return (a.nombre||"") < (b.nombre||"") ? -1 : 1; });
+      return h("div",{style:{marginBottom:16}},
+        h("div",{className:"row",style:{justifyContent:"space-between",
+            alignItems:"baseline",gap:10,marginBottom:8}},
+          h("span",{className:"lbl"},
+            esRec ? "Receptores cargados" : "Emisores cargados"),
+          h("span",{className:"hint"},
+            plural(todos.length,"cargado","cargados") +
+            (bq ? " · " + vis.length + " coinciden" : ""))),
+        h("input",{className:"in",style:{maxWidth:300,marginBottom:8},
+          placeholder:"buscar por nombre o RUC…", value:bq,
+          onChange:function(e){ setBq(e.target.value); }}),
+        !vis.length
+          ? h("div",{className:"hint"},
+              bq ? "Ninguno coincide. Si no está, se crea abajo." : "Todavía no hay ninguno.")
+          : h("div",{className:"card",style:{maxHeight:230,overflowY:"auto",
+              maxWidth:620}},
+              vis.map(function(x,i){
+                return h("div",{key:x.id,style:{padding:"7px 12px",
+                    display:"flex",justifyContent:"space-between",gap:12,
+                    borderTop: i ? "1px solid var(--rule)" : "none"}},
+                  h("span",{style:{fontSize:12}}, x.nombre),
+                  h("span",{className:"mono",style:{fontSize:11,
+                    color:"var(--ink40)",whiteSpace:"nowrap"}},
+                    x.ruc + (x.nota ? " · " + x.nota : "")));
+              })));
+    })(),
 
     que === "receptor"
       ? h("div",{className:"card",style:{padding:"16px 18px",maxWidth:620}},
@@ -3875,7 +4029,7 @@ function Deudas(p){
 
   var grupoG = function(g){
     return p.esMio(g.e.ruc) ? "mio"
-      : grupoDe4(p.esMio, g.e.persona_id ? p.P[g.e.persona_id] : null);
+      : grupoDe4(p.esMio, g.e.persona_id ? p.P[g.e.persona_id] : null, g.e.ruc);
   };
   var cta = {mio:0, contador:0, externa:0, sin_definir:0};
   grupos.forEach(function(g){ cta[grupoG(g)]++; });
@@ -3924,7 +4078,7 @@ function Deudas(p){
   var emisoresAmb = p.emisores.filter(function(e){
     if(!e.activo) return false;
     var x = p.esMio(e.ruc) ? "mio"
-      : grupoDe4(p.esMio, e.persona_id ? p.P[e.persona_id] : null);
+      : grupoDe4(p.esMio, e.persona_id ? p.P[e.persona_id] : null, e.ruc);
     if(amb === "externa") return x === "externa" || x === "sin_definir";
     return ambitoOk(amb, x);
   });
@@ -4082,7 +4236,20 @@ function Deudas(p){
                   borderTop:"1px solid var(--rule)",fontSize:13}}, money(c.monto)),
                 h("td",{style:{padding:"9px 14px",borderTop:"1px solid var(--rule)"}},
                   h("span",{className:"mono",style:{fontSize:11,color:color}},
-                    estado + (c.pagada_en ? " el " + fechaCorta(c.pagada_en) : ""))),
+                    estado + (c.pagada_en ? " el " + fechaCorta(c.pagada_en) : "")),
+                  (function(){
+                    /* Pagar tarde no cuesta nada hasta que cuesta el
+                       fraccionamiento entero. Si no se ve, no se corrige. */
+                    if(!c.pagada_en) return null;
+                    var t = Math.round(
+                      (new Date(c.pagada_en + "T12:00:00") -
+                       new Date(c.vence + "T12:00:00")) / 864e5);
+                    return t > 0
+                      ? h("div",{className:"mono",style:{fontSize:10,
+                          color:"var(--ambar)",marginTop:1}},
+                          plural(t,"día tarde","días tarde"))
+                      : null;
+                  })()),
                 h("td",{style:{padding:"9px 14px",textAlign:"right",
                     borderTop:"1px solid var(--rule)",whiteSpace:"nowrap"}},
                   c.pagada_en
@@ -4099,7 +4266,7 @@ function Deudas(p){
                               onClick:function(){ setMarcando(null); }},"x"))
                         : h("button",{className:"btn sec sm",
                             onClick:function(){ setFpago(hoyISO()); setMarcando(k); }},
-                            "pagada"))));
+                            "marcar pagada"))));
             })))));
     }),
 

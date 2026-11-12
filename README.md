@@ -68,7 +68,18 @@ registro, calcula lo que se debe y avisa antes de que venza.
   Vive en `fact_reglas_emision.correo_facturacion`; vacío = el general del
   receptor (`fact_receptores.correo_facturacion`).
 - Recibo por honorarios: sin IGV, con retención de 8% de cuarta categoría.
-  Es otro mecanismo, no una detracción.
+  Es otro mecanismo, no una detracción. `fact_facturas.igv` y `.total` son
+  columnas **calculadas y condicionadas al tipo de comprobante**: en un RxH el
+  IGV es 0 y el total es el bruto. Antes tenían el 18% fijo en la fórmula, así
+  que un recibo de S/5,000 quedaba guardado en S/5,900 sin que el formulario
+  pudiera evitarlo.
+- En pantalla, un RxH se describe con las palabras de su comprobante —bruto,
+  retención, neto— y no con base e IGV, que son de la factura. Tampoco se le
+  pide cuenta de detracción: no lleva.
+- El RUC propio de Nelson vive en `fact_emisores`, no en `eq_personas`: lo
+  suyo se anota a mano. Todo lo que mire sólo la ficha del padrón (cabecera,
+  bloqueo de la línea, grupo, KPI de "sin RUC") tiene que caer al RUC del
+  comprobante, o dice "sin RUC" de un RUC que existe.
 - Una factura anulada no se borra: se declaró, y lo que la cancela es la nota
   de crédito, que entra en negativo. Excluirla además sería restar dos veces.
 - "Mío" sale de `fact_emisores.relacion = 'propio'`, no de una lista en el
@@ -89,6 +100,11 @@ registro, calcula lo que se debe y avisa antes de que venza.
   espera a que haya una vencida: también entra la que está por vencer, en
   ámbar y sin contar como peligro, para que el indicador siga queriendo decir
   algo cuando se pone en rojo.
+- Un pendiente que nunca se emitió se puede borrar; una emitida no. Esa se
+  anula con nota de crédito, que es otro comprobante y deja rastro en SUNAT.
+- Lo anotado a mano no trae semana del FPD. Al marcarlo como emitido se pide
+  el periodo (PB) para que no quede sin periodo: PB 21 es `periodo_ind` 20,
+  porque la glosa cuenta desde uno y la base desde cero.
 - Un NPS no es un pago. Se guarda como `estado = 'nps'` y sólo pasa a `pagado`
   con la constancia.
 - **La obligación mensual nace del RUC, no de haber facturado.** Quien tiene RUC
