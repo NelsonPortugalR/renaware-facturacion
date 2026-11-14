@@ -105,6 +105,13 @@ registro, calcula lo que se debe y avisa antes de que venza.
 - Lo anotado a mano no trae semana del FPD. Al marcarlo como emitido se pide
   el periodo (PB) para que no quede sin periodo: PB 21 es `periodo_ind` 20,
   porque la glosa cuenta desde uno y la base desde cero.
+- Al cargar un reporte FPD nuevo, lo que ya está no se vuelve a crear
+  mirando sólo los borradores: **una comisión ya facturada puede seguir
+  apareciendo en el reporte** si Rena Ware todavía no la procesó. Pasó con la
+  E001-564 (semana 44, emitida el 08/11) que seguía listada en el reporte 46.
+  El filtro tiene que ser por cualquier estado, no sólo `borrador`, o la
+  comisión entra dos veces y el IGV del mes sale inflado. El índice único
+  `fact_facturas_fpd_unica` lo ataja, pero conviene no llegar hasta ahí.
 - Un NPS no es un pago. Se guarda como `estado = 'nps'` y sólo pasa a `pagado`
   con la constancia.
 - **La obligación mensual nace del RUC, no de haber facturado.** Quien tiene RUC
