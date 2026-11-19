@@ -1202,7 +1202,10 @@ function PorFacturar(p){
   var s2 = useState(""), q = s2[0], setQ = s2[1];
   var s3 = useState(false), modal = s3[0], setModal = s3[1];
   var s4 = useState(false), verHechas = s4[0], setVerHechas = s4[1];
-  var s5 = useState("con"), filtro = s5[0], setFiltro = s5[1];
+  /* Arrancaba en "con": quien no tenía RUC quedaba fuera de la vista por
+     defecto. Como la mayoría del equipo todavía no dio su RUC, eso escondía
+     la mayor parte de la plata pendiente y parecía que no estaba cargada. */
+  var s5 = useState("todos"), filtro = s5[0], setFiltro = s5[1];
   var s6 = useState(false), nueva = s6[0], setNueva = s6[1];
   var s7 = useState("todas"), amb = s7[0], setAmb = s7[1];
   var s8 = useState(null), abierta = s8[0], setAbierta = s8[1];
@@ -1337,10 +1340,17 @@ function PorFacturar(p){
       ["sin","Sin RUC",sinRuc.length],
       ["todos","Todos",todosGrupos.length]]}),
 
-    filtro === "sin" ? h("div",{className:"hint",style:{marginBottom:14,
+    /* Antes este aviso sólo aparecía dentro de la pestaña "Sin RUC", y como
+       la lista arrancaba filtrada en "Con RUC", esa plata no se veía nunca. */
+    sinRuc.length ? h("div",{className:"hint",style:{marginBottom:14,
         lineHeight:1.7,maxWidth:640}},
-      "Estos no se pueden facturar hasta tener RUC. Son " + miles(sumaDe(sinRuc)) +
-      " trabados por falta de dato, no por falta de gestión. El RUC se carga en Padrón.") : null,
+      plural(sinRuc.length,"persona no puede facturar","personas no pueden facturar") +
+      " hasta tener RUC: " + miles(sumaDe(sinRuc)) +
+      " trabados por falta de dato, no por falta de gestión. El RUC se carga en Padrón.",
+      filtro !== "sin"
+        ? h("button",{className:"lk",style:{marginLeft:6},
+            onClick:function(){ setFiltro("sin"); }}, "ver sólo esos")
+        : null) : null,
 
     (!grupos.length ? h(Vacio,{nota:"Cuando llegue el próximo reporte FPD se cargan aquí."},
       filtro === "sin" ? "Todos tienen RUC." :

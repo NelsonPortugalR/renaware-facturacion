@@ -89,6 +89,12 @@ registro, calcula lo que se debe y avisa antes de que venza.
   facturar. Portugal Research arranca en la 44: lo anterior figura en el
   reporte pero no es suyo de facturar. Sin esa marca, cada reporte nuevo
   volvería a crearlas como pendientes.
+- Por facturar **muestra a todos**, también a quien no tiene RUC y por eso no
+  puede facturar todavía: su línea aparece con la casilla deshabilitada. Antes
+  la lista arrancaba filtrada en "Con RUC" y, como la mayor parte del equipo
+  no ha dado su RUC, el 84% de la plata pendiente no se veía nunca y parecía
+  no estar cargada. Esconder lo que no es accionable esconde también que
+  existe.
 - En la lista de Por facturar la cifra chica es la **base**, no lo que cae al
   banco. Con detracción no son lo mismo, y llamarla "neto" hacía leer el
   número equivocado.

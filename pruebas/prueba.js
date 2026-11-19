@@ -641,8 +641,13 @@ setTimeout(async () => {
   /* la pestaña cuenta comisiones y la lista muestra personas: hay que decirlo */
   ok("dice cuántas comisiones y de cuántas personas",
     /comisiones pendientes de/.test(T2) || /comisión pendiente de/.test(T2));
-  ok("arranca en los que sí se pueden facturar",
-    /ANA PRUEBA UNO/.test(T2) && !/BEA PRUEBA DOS/.test(T2));
+  /* Arrancaba mostrando sólo a quien tiene RUC, y los demás no aparecían.
+     Con la mayoría del equipo sin RUC cargado, eso escondía casi toda la
+     plata pendiente y parecía que no estaba en el sistema. */
+  ok("arranca mostrando a todos, también a quien no puede facturar todavía",
+    /ANA PRUEBA UNO/.test(T2) && /BEA PRUEBA DOS/.test(T2));
+  ok("dice cuánto está trabado sin tener que entrar a esa pestaña",
+    /trabados por falta de dato/.test(T2) && /no pueden facturar|no puede facturar/.test(T2));
   /* "neto" se leía como lo que cae al banco, y con detracción no es lo mismo.
      La diferencia es plata, así que la línea tiene que decir las dos cosas. */
   ok("la lista dice base y no neto",
@@ -670,7 +675,13 @@ setTimeout(async () => {
   const checks = [...doc.querySelectorAll('input[type=checkbox]')];
   /* dos: los dos pendientes de ANA. El de BEA no tiene casilla porque sin RUC
      no se puede facturar. */
-  ok("hay 3 casillas, las de quien tiene RUC", checks.length === 3, "hay " + checks.length);
+  /* Ahora la lista muestra a todos, así que BEA también tiene su línea. Lo
+     que la separa no es estar oculta: es que su casilla no se puede marcar. */
+  ok("hay 4 casillas, una por comisión pendiente", checks.length === 4,
+    "hay " + checks.length);
+  ok("sólo se pueden marcar las de quien sí puede facturar",
+    checks.filter(c => !c.disabled).length === 3,
+    "habilitadas: " + checks.filter(c => !c.disabled).length);
   ok("esa casilla está habilitada", checks.some(c => !c.disabled));
   /* todo lo que hace falta para emitir, en la misma línea */
   {
